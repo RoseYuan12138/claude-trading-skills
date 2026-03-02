@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Skill auto-generation pipeline orchestrator.
 
-Mines session logs for skill ideas (weekly) and will later
-design, review, create skills, and open PRs (daily).
+Mines session logs for skill ideas (weekly) and designs,
+reviews, creates skills, and opens PRs (daily).
 """
 
 from __future__ import annotations
@@ -11,8 +11,11 @@ import argparse
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +26,8 @@ logger = logging.getLogger("skill_generation")
 # Script paths (relative to project root)
 MINE_SCRIPT = "skills/skill-idea-miner/scripts/mine_session_logs.py"
 SCORE_SCRIPT = "skills/skill-idea-miner/scripts/score_ideas.py"
+DESIGN_SCRIPT = "skills/skill-designer/scripts/build_design_prompt.py"
+REVIEWER_SCRIPT = "skills/dual-axis-skill-reviewer/scripts/run_dual_axis_review.py"
 
 # File paths (relative to project root)
 LOCK_FILE = "logs/.skill_generation.lock"
@@ -37,6 +42,14 @@ CLAUDE_BUDGET_MINE = 1.00
 CLAUDE_BUDGET_SCORE = 0.50
 HISTORY_LIMIT = 60
 LOG_RETENTION_DAYS = 30
+
+# Daily flow constants
+DESIGN_SCORE_THRESHOLD = 70
+MAX_DESIGN_ITERATIONS = 2  # initial review + 1 improvement pass
+MAX_RETRIES = 1  # retry count for design_failed/pr_failed
+CLAUDE_BUDGET_DESIGN = 3.00
+CLAUDE_BUDGET_REVISE = 2.00
+DESIGN_TIMEOUT = 600
 
 
 # -- Lock --
@@ -285,6 +298,1021 @@ def rotate_logs(project_root: Path) -> None:
                 pass
 
 
+# -- Git safety --
+
+
+def git_safe_check(project_root: Path) -> bool:
+    """Verify clean working tree on main branch and pull latest."""
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if status.stdout.strip():
+            logger.error("Working tree is dirty. Aborting.")
+            return False
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if branch.stdout.strip() != "main":
+            logger.error("Not on main branch (on '%s'). Aborting.", branch.stdout.strip())
+            return False
+
+        pull = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pull.returncode != 0:
+            logger.warning(
+                "git pull --ff-only failed; will retry next run. stderr: %s",
+                pull.stderr.strip(),
+            )
+            return False
+
+    except FileNotFoundError:
+        logger.error("git not found.")
+        return False
+
+    return True
+
+
+# -- PR checks --
+
+
+def check_existing_pr(project_root: Path, branch_name: str) -> bool:
+    """Check if an open PR already exists for this branch."""
+    if not shutil.which("gh"):
+        return False
+    result = subprocess.run(
+        ["gh", "pr", "list", "--head", branch_name, "--state", "open", "--json", "number"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        prs = json.loads(result.stdout)
+        return len(prs) > 0
+    except json.JSONDecodeError:
+        return False
+
+
+# -- Branch cleanup --
+
+
+def cleanup_merged_branches(project_root: Path, prefix: str = "skill-improvement/") -> None:
+    """Delete local branches whose PRs are merged or closed."""
+    if not shutil.which("gh"):
+        return
+
+    result = subprocess.run(
+        ["git", "branch", "--list", f"{prefix}*"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return
+
+    for line in result.stdout.strip().splitlines():
+        branch = line.strip().lstrip("* ")
+        if not branch:
+            continue
+        pr_state = subprocess.run(
+            ["gh", "pr", "view", branch, "--json", "state"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pr_state.returncode != 0:
+            continue
+        try:
+            data = json.loads(pr_state.stdout)
+            state_val = data.get("state", "").upper()
+            if state_val in ("MERGED", "CLOSED"):
+                subprocess.run(
+                    ["git", "branch", "-D", branch],
+                    cwd=project_root,
+                    capture_output=True,
+                    check=False,
+                )
+                logger.info("Deleted merged/closed branch: %s", branch)
+        except json.JSONDecodeError:
+            pass
+
+
+# -- Auto scoring --
+
+
+def _build_reviewer_cmd(project_root: Path) -> list[str]:
+    """Return command prefix for invoking the reviewer script."""
+    if shutil.which("uv"):
+        return ["uv", "run", "--extra", "dev", "python", str(project_root / REVIEWER_SCRIPT)]
+    return [sys.executable, str(project_root / REVIEWER_SCRIPT)]
+
+
+def run_auto_score(
+    project_root: Path,
+    skill_name: str,
+    skip_tests: bool = True,
+) -> dict | None:
+    """Run the auto reviewer and return its JSON report."""
+    script = str(project_root / REVIEWER_SCRIPT)
+    extra_args: list[str] = [
+        "--project-root",
+        str(project_root),
+        "--skill",
+        skill_name,
+        "--output-dir",
+        "reports",
+    ]
+    if skip_tests:
+        extra_args.append("--skip-tests")
+
+    cmd = [*_build_reviewer_cmd(project_root), *extra_args]
+
+    result = subprocess.run(
+        cmd, cwd=project_root, capture_output=True, text=True, check=False, timeout=120
+    )
+
+    # Fallback: if uv failed, retry with sys.executable
+    if result.returncode != 0 and cmd[0] == "uv":
+        logger.warning("uv run failed for %s; falling back to %s.", skill_name, sys.executable)
+        cmd = [sys.executable, script, *extra_args]
+        result = subprocess.run(
+            cmd, cwd=project_root, capture_output=True, text=True, check=False, timeout=120
+        )
+
+    if result.returncode != 0:
+        logger.error("Auto score failed for %s: %s", skill_name, result.stderr.strip()[:500])
+        return None
+
+    report_files = sorted(
+        (project_root / "reports").glob(f"skill_review_{skill_name}_*.json"), reverse=True
+    )
+    if not report_files:
+        logger.error("No report JSON found for %s.", skill_name)
+        return None
+
+    return json.loads(report_files[0].read_text(encoding="utf-8"))
+
+
+# -- Claude output helpers --
+
+
+def _extract_json_from_claude(output: str, required_keys: list[str]) -> dict | None:
+    """Extract JSON from claude CLI --output-format json envelope."""
+    try:
+        wrapper = json.loads(output)
+        text = ""
+        if isinstance(wrapper, dict):
+            text = wrapper.get("result", "") or ""
+            if not text:
+                content = wrapper.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text += block.get("text", "")
+        if not text:
+            text = output
+    except json.JSONDecodeError:
+        text = output
+
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        pos = text.find("{", idx)
+        if pos == -1:
+            break
+        try:
+            obj, _end_idx = decoder.raw_decode(text, pos)
+            if isinstance(obj, dict) and any(k in obj for k in required_keys):
+                return obj
+            idx = pos + 1
+        except json.JSONDecodeError:
+            idx = pos + 1
+    return None
+
+
+def _is_nothing_to_commit_output(output: str) -> bool:
+    """Return True when git commit output indicates no staged changes."""
+    text = output.lower()
+    return (
+        "nothing to commit" in text
+        or "no changes added to commit" in text
+        or "nothing added to commit" in text
+    )
+
+
+def _get_staged_files(project_root: Path, skill_name: str) -> list[str]:
+    """Return list of staged files under the skill directory."""
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--", f"skills/{skill_name}/"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    return [f.strip() for f in result.stdout.strip().splitlines() if f.strip()]
+
+
+# -- Daily flow: idea selection --
+
+
+def idea_to_skill_name(idea: dict) -> str:
+    """Convert an idea title to a normalized skill directory name."""
+    title = idea.get("title", idea.get("id", "unnamed"))
+    # Lowercase and replace non-alphanumeric with hyphens
+    name = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if not name or not any(c.isalpha() for c in name):
+        # Fallback to idea id if title produces no alpha chars
+        name = re.sub(r"[^a-z0-9]+", "-", idea.get("id", "unnamed").lower()).strip("-")
+    return name or "unnamed-skill"
+
+
+def select_next_idea(backlog: dict, project_root: Path) -> dict | None:
+    """Pick the highest composite-score idea that is eligible for processing.
+
+    Eligible = status is 'pending' OR (status in RETRYABLE and retry_count <= MAX_RETRIES).
+    Additionally, skip ideas whose skill directory already exists (runtime dedup).
+    """
+    RETRYABLE = {"design_failed", "pr_failed"}
+    eligible = []
+    for idea in backlog.get("ideas", []):
+        status = idea.get("status", "pending")
+        retry_count = idea.get("retry_count", 0)
+        if status == "pending":
+            eligible.append(idea)
+        elif status in RETRYABLE and retry_count <= MAX_RETRIES:
+            eligible.append(idea)
+
+    if not eligible:
+        return None
+
+    # Sort: pending first, then retryable; within each group by composite score descending
+    eligible.sort(
+        key=lambda i: (
+            0 if i.get("status", "pending") == "pending" else 1,
+            -(i.get("scores", {}).get("composite", 0)),
+        )
+    )
+
+    # Runtime dedup: skip ideas whose skill already exists on disk
+    for idea in eligible:
+        skill_name = idea_to_skill_name(idea)
+        skill_dir = project_root / "skills" / skill_name
+        if not (skill_dir / "SKILL.md").exists():
+            return idea
+        logger.info("Skipping '%s': skills/%s/ already exists.", idea.get("title"), skill_name)
+
+    return None
+
+
+# -- Daily flow: backlog updates --
+
+
+def update_backlog_status(
+    project_root: Path, idea_id: str, status: str, pr_url: str | None = None
+) -> None:
+    """Update the status of an idea in the backlog using atomic write."""
+    backlog_path = project_root / BACKLOG_FILE
+    backlog = load_backlog(project_root)
+
+    for idea in backlog.get("ideas", []):
+        if idea.get("id") == idea_id:
+            idea["status"] = status
+            idea["attempted_at"] = datetime.now().isoformat()
+            if pr_url:
+                idea["pr_url"] = pr_url
+            # Increment retry_count for retryable failures
+            if status in {"design_failed", "pr_failed"}:
+                idea["retry_count"] = idea.get("retry_count", 0) + 1
+            break
+
+    # Atomic write: write to temp file then rename
+    backlog_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(backlog_path.parent), suffix=".yaml", prefix=".backlog_"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(backlog, f, default_flow_style=False, allow_unicode=True)
+        os.replace(tmp_path, str(backlog_path))
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+# -- Daily flow: unexpected changes check --
+
+
+def _check_unexpected_changes(project_root: Path, skill_name: str) -> bool:
+    """Check if files outside allowed paths were modified. Returns True if clean."""
+    # Get all modified/untracked files
+    diff_result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ls_result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    all_changes = []
+    if diff_result.stdout.strip():
+        all_changes.extend(diff_result.stdout.strip().splitlines())
+    if ls_result.stdout.strip():
+        all_changes.extend(ls_result.stdout.strip().splitlines())
+
+    if not all_changes:
+        return True
+
+    allowed_prefixes = [
+        f"skills/{skill_name}/",
+        "reports/",
+    ]
+    unexpected = [
+        f.strip()
+        for f in all_changes
+        if f.strip() and not any(f.strip().startswith(p) for p in allowed_prefixes)
+    ]
+
+    if unexpected:
+        logger.error(
+            "Unexpected file changes outside allowed paths: %s",
+            unexpected[:5],
+        )
+        return False
+    return True
+
+
+# -- Daily flow: design and improve --
+
+
+def design_skill(project_root: Path, idea: dict, skill_name: str, dry_run: bool = False) -> bool:
+    """Build design prompt and invoke claude -p to create the skill.
+
+    Returns True on success (SKILL.md exists), False on failure.
+    """
+    if dry_run:
+        logger.info("[dry-run] Would design skill '%s'.", skill_name)
+        return True
+
+    if not shutil.which("claude"):
+        logger.error("claude CLI not found; cannot design skill.")
+        return False
+
+    design_script = project_root / DESIGN_SCRIPT
+    if not design_script.exists():
+        logger.error("Design script not found: %s", design_script)
+        return False
+
+    # Write idea JSON to temp file
+    fd, idea_json_path = tempfile.mkstemp(suffix=".json", prefix="idea_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(idea, f)
+
+        # Build the design prompt
+        prompt_result = subprocess.run(
+            [
+                sys.executable,
+                str(design_script),
+                "--idea-json",
+                idea_json_path,
+                "--skill-name",
+                skill_name,
+                "--project-root",
+                str(project_root),
+            ],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        if prompt_result.returncode != 0:
+            logger.error("build_design_prompt failed: %s", prompt_result.stderr.strip()[:300])
+            return False
+
+        prompt_text = prompt_result.stdout
+        if not prompt_text.strip():
+            logger.error("build_design_prompt produced empty output.")
+            return False
+
+        # Invoke claude -p with the design prompt
+        result = subprocess.run(
+            [
+                "claude",
+                "-p",
+                "--allowedTools",
+                "Read,Edit,Write,Glob,Grep",
+                f"--max-budget-usd={CLAUDE_BUDGET_DESIGN}",
+            ],
+            input=prompt_text,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DESIGN_TIMEOUT,
+        )
+        if result.returncode != 0:
+            logger.error("claude -p design failed: %s", result.stderr.strip()[:300])
+            return False
+
+        # Gap A: Verify SKILL.md was actually created
+        skill_md = project_root / "skills" / skill_name / "SKILL.md"
+        if not skill_md.exists():
+            logger.error("claude -p exited 0 but SKILL.md not created at %s.", skill_md)
+            return False
+
+        return True
+
+    except subprocess.TimeoutExpired:
+        logger.error("Design step timed out after %d seconds.", DESIGN_TIMEOUT)
+        return False
+    finally:
+        try:
+            os.unlink(idea_json_path)
+        except OSError:
+            pass
+
+
+def improve_skill(project_root: Path, skill_name: str, findings: list[str]) -> bool:
+    """Invoke claude -p to improve a skill based on review findings.
+
+    Returns True on success, False on failure.
+    """
+    if not shutil.which("claude"):
+        logger.error("claude CLI not found; cannot improve skill.")
+        return False
+
+    prompt = (
+        f"Improve the skill '{skill_name}' in skills/{skill_name}/ based on these findings:\n\n"
+        + "\n".join(f"- {item}" for item in findings[:10])
+        + "\n\nMake minimal, targeted edits to address the findings. Do not change unrelated code."
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "claude",
+                "-p",
+                "--allowedTools",
+                "Read,Edit,Write,Glob,Grep",
+                f"--max-budget-usd={CLAUDE_BUDGET_REVISE}",
+            ],
+            input=prompt,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DESIGN_TIMEOUT,
+        )
+        if result.returncode != 0:
+            logger.error("claude -p improve failed: %s", result.stderr.strip()[:300])
+            return False
+        return True
+
+    except subprocess.TimeoutExpired:
+        logger.error("Improve step timed out after %d seconds.", DESIGN_TIMEOUT)
+        return False
+
+
+# -- Daily flow: review and improve loop --
+
+
+def review_and_improve(
+    project_root: Path, skill_name: str, dry_run: bool = False
+) -> tuple[bool, dict | None]:
+    """Score the skill, optionally improve, and return (passed, report).
+
+    Iteration 0: score with skip_tests=True
+      >= threshold: final score with skip_tests=False
+      < threshold: improve, then iteration 1
+    Iteration 1 (final): score with skip_tests=False
+      >= threshold: pass
+      < threshold: fail
+    """
+    if dry_run:
+        return True, None
+
+    for iteration in range(MAX_DESIGN_ITERATIONS):
+        is_final = iteration == MAX_DESIGN_ITERATIONS - 1
+        skip_tests = not is_final and iteration == 0
+
+        report = run_auto_score(project_root, skill_name, skip_tests=skip_tests)
+        if not report:
+            logger.error("Auto scoring failed on iteration %d.", iteration)
+            return False, None
+
+        score = report.get("auto_review", {}).get("score", 0)
+        logger.info(
+            "Review iteration %d: score=%d (threshold=%d, skip_tests=%s).",
+            iteration,
+            score,
+            DESIGN_SCORE_THRESHOLD,
+            skip_tests,
+        )
+
+        if score >= DESIGN_SCORE_THRESHOLD:
+            if skip_tests:
+                # Run final pass with tests enabled
+                final_report = run_auto_score(project_root, skill_name, skip_tests=False)
+                if final_report:
+                    final_score = final_report.get("auto_review", {}).get("score", 0)
+                    if final_score >= DESIGN_SCORE_THRESHOLD:
+                        return True, final_report
+                    # Final with tests failed; try improvement
+                    report = final_report
+                    score = final_score
+                else:
+                    return False, report
+            else:
+                return True, report
+
+        # Below threshold: attempt improvement (not on final iteration)
+        if is_final:
+            logger.warning(
+                "Final iteration score %d below threshold %d.", score, DESIGN_SCORE_THRESHOLD
+            )
+            return False, report
+
+        # Extract improvement items
+        findings = report.get("auto_review", {}).get("improvement_items", [])
+        if not findings:
+            findings = [f"Score {score} below {DESIGN_SCORE_THRESHOLD}; improve skill quality."]
+
+        ok = improve_skill(project_root, skill_name, findings)
+        if not ok:
+            return False, report
+
+        # Check for unexpected changes after improvement
+        if not _check_unexpected_changes(project_root, skill_name):
+            return False, report
+
+    return False, None
+
+
+# -- Daily flow: rollback --
+
+
+def _rollback_skill(project_root: Path, skill_name: str, branch_name: str) -> None:
+    """Roll back ALL changes and return to main."""
+    # Unstage any staged changes
+    subprocess.run(
+        ["git", "reset", "HEAD", "--", f"skills/{skill_name}/"],
+        cwd=project_root,
+        capture_output=True,
+        check=False,
+    )
+    # Restore modified tracked files
+    subprocess.run(
+        ["git", "checkout", "--", f"skills/{skill_name}/"],
+        cwd=project_root,
+        capture_output=True,
+        check=False,
+    )
+    # Remove untracked files/dirs under the skill
+    subprocess.run(
+        ["git", "clean", "-fd", f"skills/{skill_name}/"],
+        cwd=project_root,
+        capture_output=True,
+        check=False,
+    )
+    # Return to main
+    subprocess.run(
+        ["git", "checkout", "main"],
+        cwd=project_root,
+        capture_output=True,
+        check=False,
+    )
+    # Delete the feature branch
+    subprocess.run(
+        ["git", "branch", "-D", branch_name],
+        cwd=project_root,
+        capture_output=True,
+        check=False,
+    )
+
+
+# -- Daily flow: PR creation --
+
+
+def create_skill_pr(
+    project_root: Path,
+    skill_name: str,
+    idea: dict,
+    report: dict | None,
+    branch_name: str,
+) -> str | None:
+    """Lint, commit, push, and create a PR. Returns PR URL or None."""
+    # Auto-fix lint issues
+    if shutil.which("ruff"):
+        subprocess.run(
+            ["ruff", "check", "--fix", f"skills/{skill_name}/"],
+            cwd=project_root,
+            capture_output=True,
+            check=False,
+        )
+        subprocess.run(
+            ["ruff", "format", f"skills/{skill_name}/"],
+            cwd=project_root,
+            capture_output=True,
+            check=False,
+        )
+
+    # Stage files
+    subprocess.run(
+        ["git", "add", f"skills/{skill_name}/"],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+    )
+
+    # Run pre-commit hooks
+    if shutil.which("pre-commit"):
+        staged = _get_staged_files(project_root, skill_name)
+        if staged:
+            pc_result = subprocess.run(
+                ["pre-commit", "run", "--files"] + staged,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if pc_result.returncode != 0:
+                logger.info("pre-commit auto-fixed files; re-staging.")
+                subprocess.run(
+                    ["git", "add", f"skills/{skill_name}/"],
+                    cwd=project_root,
+                    check=True,
+                    capture_output=True,
+                )
+                # 2nd pass
+                staged2 = _get_staged_files(project_root, skill_name)
+                if staged2:
+                    pc2 = subprocess.run(
+                        ["pre-commit", "run", "--files"] + staged2,
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if pc2.returncode != 0:
+                        logger.error("pre-commit still failing after auto-fix.")
+                        return None
+
+    score = 0
+    if report:
+        score = report.get("auto_review", {}).get("score", 0)
+
+    commit_msg = f"Add {skill_name} skill (auto-generated, score {score})"
+    commit = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if commit.returncode != 0:
+        commit_output = ((commit.stderr or "") + "\n" + (commit.stdout or "")).strip()
+        if _is_nothing_to_commit_output(commit_output):
+            logger.info("No staged changes to commit for %s.", skill_name)
+            return None
+        logger.error("git commit failed: %s", commit_output[:500])
+        return None
+
+    push = subprocess.run(
+        ["git", "push", "-u", "origin", branch_name],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if push.returncode != 0:
+        logger.error("git push failed: %s", push.stderr.strip()[:300])
+        return None
+
+    title_text = idea.get("title", skill_name)
+    pr_body = (
+        f"## Summary\n"
+        f"- Skill: `{skill_name}`\n"
+        f"- Idea: {title_text}\n"
+        f"- Auto-review score: {score}/100\n\n"
+        f"## Description\n"
+        f"{idea.get('description', 'N/A')}\n\n"
+        f"## Post-merge TODO\n"
+        f"- [ ] Add skill to README.md and README.ja.md\n"
+        f"- [ ] Update CLAUDE.md if needed\n\n"
+        f"Generated by skill auto-generation pipeline."
+    )
+    pr = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--head",
+            branch_name,
+            "--title",
+            f"Add {skill_name} skill (auto-generated)",
+            "--body",
+            pr_body,
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pr.returncode != 0:
+        logger.error("gh pr create failed: %s", pr.stderr.strip()[:300])
+        return None
+
+    pr_url = pr.stdout.strip()
+    # Gap B: verify URL
+    if not pr_url.startswith("http"):
+        logger.warning("gh pr create output is not a URL: %s", pr_url[:200])
+        return None
+
+    return pr_url
+
+
+# -- Daily flow: summary --
+
+
+def write_daily_generation_summary(
+    project_root: Path,
+    idea: dict,
+    skill_name: str,
+    report: dict | None,
+    pr_url: str | None,
+    dry_run: bool = False,
+) -> None:
+    """Write markdown summary for daily generation run."""
+    summary_dir = project_root / SUMMARY_DIR
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    summary_path = summary_dir / f"{today}_daily.md"
+
+    score = 0
+    if report:
+        score = report.get("auto_review", {}).get("score", 0)
+
+    dry_tag = " (dry-run)" if dry_run else ""
+    entry = (
+        f"\n## Daily Generation{dry_tag}\n"
+        f"- Date: {today}\n"
+        f"- Idea: {idea.get('title', 'N/A')}\n"
+        f"- Skill: {skill_name}\n"
+        f"- Score: {score}/100\n"
+        f"- PR: {pr_url or 'N/A'}\n"
+    )
+
+    if summary_path.exists():
+        existing = summary_path.read_text(encoding="utf-8")
+        summary_path.write_text(existing + entry, encoding="utf-8")
+    else:
+        header = f"# Skill Generation Daily Summary - {today}\n"
+        summary_path.write_text(header + entry, encoding="utf-8")
+
+
+# -- Daily flow: main orchestrator --
+
+
+def run_daily(project_root: Path, dry_run: bool = False) -> int:
+    """Main daily flow: select idea, design skill, review, improve, create PR.
+
+    Returns 0 on success (or no-op), 1 on failure.
+    """
+    log_dir = project_root / LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_dir / "skill_generation.log"),
+        ],
+    )
+
+    if not acquire_lock(project_root):
+        return 0
+
+    created_branch = False
+
+    try:
+        # Select idea (read-only, safe for dry-run)
+        backlog = load_backlog(project_root)
+        idea = select_next_idea(backlog, project_root)
+        if not idea:
+            logger.info("No eligible ideas in backlog.")
+            state = load_state(project_root)
+            state["last_run"] = datetime.now().isoformat()
+            state["history"].append(
+                {
+                    "mode": "daily",
+                    "idea": None,
+                    "skill": None,
+                    "dry_run": dry_run,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+            save_state(project_root, state)
+            return 0
+
+        skill_name = idea_to_skill_name(idea)
+        idea_id = idea.get("id", "unknown")
+        logger.info(
+            "Selected: %s (id=%s) -> skill: %s",
+            idea.get("title"),
+            idea_id,
+            skill_name,
+        )
+
+        if dry_run:
+            logger.info(
+                "[dry-run] Would design skill '%s' from idea '%s'.",
+                skill_name,
+                idea.get("title"),
+            )
+            write_daily_generation_summary(project_root, idea, skill_name, None, None, dry_run=True)
+            state = load_state(project_root)
+            state["last_run"] = datetime.now().isoformat()
+            state["history"].append(
+                {
+                    "mode": "daily",
+                    "idea": idea.get("title"),
+                    "idea_id": idea_id,
+                    "skill": skill_name,
+                    "score": 0,
+                    "pr_url": None,
+                    "dry_run": True,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+            save_state(project_root, state)
+            return 0
+
+        # Non-dry-run: full flow
+        if not git_safe_check(project_root):
+            return 1
+
+        branch_name = f"skill-generation/{idea_id}-{skill_name}"
+
+        # Fix V3#1: existing PR -> mark as pr_open
+        if check_existing_pr(project_root, branch_name):
+            logger.info("Open PR already exists for %s.", branch_name)
+            update_backlog_status(project_root, idea_id, "pr_open")
+            return 0
+
+        # Fix #3: delete stale local branch if present
+        subprocess.run(
+            ["git", "branch", "-D", branch_name],
+            cwd=project_root,
+            capture_output=True,
+            check=False,
+        )
+
+        # Create branch
+        result = subprocess.run(
+            ["git", "checkout", "-b", branch_name],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.error("git checkout -b failed: %s", result.stderr.strip()[:200])
+            return 1
+
+        created_branch = True
+
+        # Step 10: Design the skill
+        if not design_skill(project_root, idea, skill_name):
+            _rollback_skill(project_root, skill_name, branch_name)
+            created_branch = False
+            update_backlog_status(project_root, idea_id, "design_failed")
+            return 1
+
+        # Step 11: Check for unexpected changes
+        if not _check_unexpected_changes(project_root, skill_name):
+            logger.error(
+                "Unexpected changes detected. Branch '%s' preserved for manual inspection. "
+                "Run 'git diff' and 'git status' to review, then "
+                "'git checkout main && git branch -D %s' to clean up.",
+                branch_name,
+                branch_name,
+            )
+            update_backlog_status(project_root, idea_id, "unexpected_changes")
+            return 1
+
+        # Step 12: Review and improve
+        passed, report = review_and_improve(project_root, skill_name)
+        if not passed:
+            _rollback_skill(project_root, skill_name, branch_name)
+            created_branch = False
+            update_backlog_status(project_root, idea_id, "review_failed")
+            return 1
+
+        # Step 13: Check for unexpected changes after improvement
+        if not _check_unexpected_changes(project_root, skill_name):
+            logger.error(
+                "Unexpected changes after improvement. Branch '%s' preserved.",
+                branch_name,
+            )
+            update_backlog_status(project_root, idea_id, "unexpected_changes")
+            return 1
+
+        # Step 14: Create PR
+        pr_url = create_skill_pr(project_root, skill_name, idea, report, branch_name)
+        if not pr_url:
+            _rollback_skill(project_root, skill_name, branch_name)
+            created_branch = False
+            update_backlog_status(project_root, idea_id, "pr_failed")
+            return 1
+
+        # Step 15: Mark as completed
+        update_backlog_status(project_root, idea_id, "completed", pr_url=pr_url)
+
+        # Step 16: Return to main
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=project_root,
+            capture_output=True,
+            check=False,
+        )
+        created_branch = False
+
+        # Step 17: Summary and state
+        score = 0
+        if report:
+            score = report.get("auto_review", {}).get("score", 0)
+
+        write_daily_generation_summary(project_root, idea, skill_name, report, pr_url)
+
+        state = load_state(project_root)
+        state["last_run"] = datetime.now().isoformat()
+        state["history"].append(
+            {
+                "mode": "daily",
+                "idea": idea.get("title"),
+                "idea_id": idea_id,
+                "skill": skill_name,
+                "score": score,
+                "pr_url": pr_url,
+                "dry_run": False,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        save_state(project_root, state)
+
+        # Step 18: Cleanup
+        cleanup_merged_branches(project_root, prefix="skill-generation/")
+        rotate_logs(project_root)
+
+        logger.info("Daily run complete. PR: %s", pr_url)
+        return 0
+
+    finally:
+        # Fix R#2: only checkout main if we created a branch and haven't returned to main yet
+        if created_branch:
+            subprocess.run(
+                ["git", "checkout", "main"],
+                cwd=project_root,
+                capture_output=True,
+                check=False,
+            )
+        release_lock(project_root)
+
+
 # -- Weekly flow --
 
 
@@ -365,8 +1393,8 @@ def parse_args():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["weekly"],
-        help="Pipeline mode (weekly: mine + score)",
+        choices=["weekly", "daily"],
+        help="Pipeline mode (weekly: mine + score, daily: design + review + PR)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to subscripts")
     parser.add_argument("--project-root", default=".", help="Project root directory")
@@ -379,6 +1407,8 @@ def main() -> int:
 
     if args.mode == "weekly":
         return run_weekly(project_root, dry_run=args.dry_run)
+    elif args.mode == "daily":
+        return run_daily(project_root, dry_run=args.dry_run)
 
     return 1
 

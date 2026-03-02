@@ -480,6 +480,56 @@ python3 -m pytest skills/dual-axis-skill-reviewer/scripts/tests/ -v
 python3 -m pytest scripts/tests/test_skill_improvement_loop.py -v
 ```
 
+### Skill Auto-Generation Pipeline
+
+An automated pipeline that mines session logs for skill ideas (weekly) and designs, reviews, and creates new skills as PRs (daily).
+
+**Architecture:**
+- `scripts/run_skill_generation_pipeline.py` — orchestrator (weekly: mine+score, daily: design+review+PR)
+- `skills/skill-idea-miner/` — mining and scoring scripts
+- `skills/skill-designer/` — design prompt builder with quality references
+- `skills/dual-axis-skill-reviewer/` — scoring engine (reused from improvement loop)
+- `scripts/run_skill_generation.sh` — thin shell wrapper for launchd
+- `launchd/com.trade-analysis.skill-generation-weekly.plist` — weekly mining (Saturday 06:00)
+- `launchd/com.trade-analysis.skill-generation-daily.plist` — daily generation (07:00)
+
+**Key design decisions:**
+- Weekly mode mines session logs and scores ideas into `logs/.skill_generation_backlog.yaml`
+- Daily mode picks the highest-scoring eligible idea and generates a complete skill
+- `select_next_idea()` prioritizes pending ideas by composite score; retries `design_failed`/`pr_failed` once
+- `review_failed` is terminal (no retry) since it indicates content quality issues
+- Runtime dedup checks `skills/<name>/SKILL.md` existence before processing
+- `_check_unexpected_changes()` detects modifications outside `skills/<name>/` and `reports/`; preserves branch for manual inspection
+- Atomic backlog updates via `tempfile` + `os.replace()`
+- `created_branch` flag prevents spurious `git checkout main` in finally block
+
+**Running manually:**
+```bash
+# Weekly: mine ideas from session logs and score them
+python3 scripts/run_skill_generation_pipeline.py --mode weekly --dry-run
+
+# Daily: design a skill from the highest-scoring backlog idea
+python3 scripts/run_skill_generation_pipeline.py --mode daily --dry-run
+
+# Full daily run (creates branch, designs skill, opens PR)
+python3 scripts/run_skill_generation_pipeline.py --mode daily
+```
+
+**State and output files:**
+- `logs/.skill_generation_state.json` — run history (60-entry limit)
+- `logs/.skill_generation_backlog.yaml` — scored ideas with status tracking
+- `logs/skill_generation.log` — execution log (30-day rotation)
+- `reports/skill-generation-log/YYYY-MM-DD_daily.md` — daily generation summary
+
+**Tests:**
+```bash
+# Pipeline tests (42 tests)
+python3 -m pytest scripts/tests/test_skill_generation_pipeline.py -v
+
+# Skill designer tests (3 tests)
+python3 -m pytest skills/skill-designer/scripts/tests/ -v
+```
+
 ## Skill Interaction Patterns
 
 ### Chart Analysis Skills (Sector Analyst, Breadth Chart Analyst, Technical Analyst)

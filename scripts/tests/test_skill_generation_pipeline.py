@@ -356,3 +356,720 @@ def test_rotate_logs(pipeline_module, tmp_path: Path):
 
     assert not old_log.exists(), "Old log should have been removed"
     assert new_log.exists(), "New log should still exist"
+
+
+# -- Daily flow: idea selection tests --
+
+
+def _make_idea(
+    id_: str = "raw_001",
+    title: str = "test-skill",
+    composite: float = 80,
+    status: str = "pending",
+    retry_count: int = 0,
+) -> dict:
+    """Helper to build an idea dict."""
+    idea = {
+        "id": id_,
+        "title": title,
+        "description": "A test skill description",
+        "category": "testing",
+        "scores": {"composite": composite},
+        "status": status,
+    }
+    if retry_count > 0:
+        idea["retry_count"] = retry_count
+    return idea
+
+
+def test_select_next_idea_picks_highest(pipeline_module, tmp_path: Path):
+    """Selects the highest composite score pending idea."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "low", 40),
+            _make_idea("b", "high", 90),
+            _make_idea("c", "mid", 60),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is not None
+    assert result["id"] == "b"
+
+
+def test_select_next_idea_skips_non_pending(pipeline_module, tmp_path: Path):
+    """Completed, duplicate, and review_failed are not eligible."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "completed-one", 90, status="completed"),
+            _make_idea("b", "duplicate-one", 85, status="duplicate"),
+            _make_idea("c", "review-failed", 80, status="review_failed"),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is None
+
+
+def test_select_next_idea_retries_design_failed(pipeline_module, tmp_path: Path):
+    """design_failed with retry_count <= MAX_RETRIES is eligible."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "design-failed-retry", 75, status="design_failed", retry_count=1),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is not None
+    assert result["id"] == "a"
+
+
+def test_select_next_idea_retries_pr_failed(pipeline_module, tmp_path: Path):
+    """pr_failed with retry_count <= MAX_RETRIES is eligible."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "pr-failed-retry", 70, status="pr_failed", retry_count=0),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is not None
+    assert result["id"] == "a"
+
+
+def test_select_next_idea_skips_review_failed(pipeline_module, tmp_path: Path):
+    """review_failed is terminal (not retryable)."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "review-failed", 80, status="review_failed"),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is None
+
+
+def test_select_next_idea_skips_exhausted_retry(pipeline_module, tmp_path: Path):
+    """design_failed with retry_count > MAX_RETRIES is skipped."""
+    backlog = {
+        "ideas": [
+            _make_idea("a", "exhausted", 90, status="design_failed", retry_count=2),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is None
+
+
+def test_select_next_idea_runtime_dedup(pipeline_module, tmp_path: Path):
+    """Skips ideas whose skill directory already exists on disk."""
+    # Create existing skill dir
+    skill_dir = tmp_path / "skills" / "existing-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: existing-skill\n---\n")
+
+    backlog = {
+        "ideas": [
+            _make_idea("a", "existing-skill", 90),
+            _make_idea("b", "new-skill", 70),
+        ]
+    }
+    result = pipeline_module.select_next_idea(backlog, tmp_path)
+    assert result is not None
+    assert result["id"] == "b"
+
+
+def test_select_next_idea_empty_backlog(pipeline_module, tmp_path: Path):
+    """Empty backlog returns None."""
+    result = pipeline_module.select_next_idea({"ideas": []}, tmp_path)
+    assert result is None
+
+
+# -- Daily flow: idea_to_skill_name tests --
+
+
+def test_idea_to_skill_name(pipeline_module):
+    """Converts title to lowercase hyphenated name."""
+    idea = {"title": "My New Skill!!", "id": "raw_001"}
+    assert pipeline_module.idea_to_skill_name(idea) == "my-new-skill"
+
+
+def test_idea_to_skill_name_unicode(pipeline_module):
+    """Falls back to id if title produces no alpha chars."""
+    idea = {"title": "日本語スキル", "id": "raw_unicode_001"}
+    result = pipeline_module.idea_to_skill_name(idea)
+    # Should fall back to id since Japanese chars are non-ascii/alpha
+    assert "raw" in result or "unicode" in result
+
+
+# -- Daily flow: integration tests --
+
+
+def _setup_daily_backlog(tmp_path: Path, pipeline_module, ideas=None) -> None:
+    """Create a backlog file with test ideas."""
+    if ideas is None:
+        ideas = [_make_idea("raw_001", "test-new-skill", 80)]
+    backlog_path = tmp_path / pipeline_module.BACKLOG_FILE
+    backlog_path.parent.mkdir(parents=True, exist_ok=True)
+    backlog_path.write_text(yaml.safe_dump({"ideas": ideas}), encoding="utf-8")
+
+
+def test_daily_flow_success(pipeline_module, tmp_path: Path):
+    """Full daily flow: design, review, PR all succeed."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    # Create design script placeholder
+    design_path = tmp_path / pipeline_module.DESIGN_SCRIPT
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    design_path.write_text("# placeholder", encoding="utf-8")
+
+    call_log = []
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+        call_log.append(cmd_str)
+
+        # git status --porcelain (clean)
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # git rev-parse (on main)
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        # git pull
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # gh pr list (no existing PR)
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, "[]", "")
+        # git branch -D (stale cleanup)
+        if "branch" in cmd_str and "-D" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # git checkout -b
+        if "checkout" in cmd_str and "-b" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # build_design_prompt
+        if "build_design_prompt" in cmd_str:
+            return CompletedProcess(cmd, 0, "design prompt text", "")
+        # claude -p (design step) - also create SKILL.md as side effect
+        if "claude" in cmd_str and "-p" in cmd_str:
+            skill_dir = tmp_path / "skills" / "test-new-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text("---\nname: test-new-skill\n---\n")
+            return CompletedProcess(cmd, 0, "", "")
+        # git diff / ls-files (no unexpected changes)
+        if "diff" in cmd_str and "--name-only" in cmd_str and "HEAD" in cmd_str:
+            return CompletedProcess(cmd, 0, "skills/test-new-skill/SKILL.md\n", "")
+        if "ls-files" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # reviewer (auto score)
+        if "run_dual_axis_review" in cmd_str:
+            # Create a report JSON
+            report_dir = tmp_path / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report = {"auto_review": {"score": 85, "improvement_items": []}}
+            report_path = report_dir / "skill_review_test-new-skill_2026.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            return CompletedProcess(cmd, 0, "", "")
+        # ruff
+        if "ruff" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # git add
+        if "git" in cmd_str and "add" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # git diff --cached (staged files)
+        if "diff" in cmd_str and "--cached" in cmd_str:
+            return CompletedProcess(cmd, 0, "skills/test-new-skill/SKILL.md\n", "")
+        # git commit
+        if "commit" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # git push
+        if "push" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # gh pr create
+        if "gh" in cmd_str and "pr" in cmd_str and "create" in cmd_str:
+            return CompletedProcess(cmd, 0, "https://github.com/test/pr/1", "")
+        # git checkout main
+        if "checkout" in cmd_str and "main" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # gh pr view (cleanup)
+        if "gh" in cmd_str and "pr" in cmd_str and "view" in cmd_str:
+            return CompletedProcess(cmd, 1, "", "not found")
+        # git branch --list
+        if "branch" in cmd_str and "--list" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    import json
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/claude"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 0
+
+    # Backlog updated to completed
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "completed"
+    assert idea["pr_url"] == "https://github.com/test/pr/1"
+
+    # State updated
+    state = pipeline_module.load_state(tmp_path)
+    assert state["history"][-1]["mode"] == "daily"
+    assert state["history"][-1]["pr_url"] == "https://github.com/test/pr/1"
+
+
+def test_daily_flow_no_ideas(pipeline_module, tmp_path: Path):
+    """Empty backlog returns 0 with no-op."""
+    _setup_daily_backlog(tmp_path, pipeline_module, ideas=[])
+
+    rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+    assert rc == 0
+
+    state = pipeline_module.load_state(tmp_path)
+    assert state["history"][-1]["idea"] is None
+
+
+def test_daily_flow_design_failure_with_rollback(pipeline_module, tmp_path: Path):
+    """Design failure triggers rollback and sets design_failed status."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    design_path = tmp_path / pipeline_module.DESIGN_SCRIPT
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    design_path.write_text("# placeholder", encoding="utf-8")
+
+    rollback_calls = []
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, "[]", "")
+        if "branch" in cmd_str and "-D" in cmd_str:
+            rollback_calls.append("branch-D")
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "-b" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "build_design_prompt" in cmd_str:
+            return CompletedProcess(cmd, 0, "prompt", "")
+        # claude -p fails (no SKILL.md created)
+        if "claude" in cmd_str and "-p" in cmd_str:
+            return CompletedProcess(cmd, 1, "", "design error")
+        # rollback commands
+        if "reset" in cmd_str:
+            rollback_calls.append("reset")
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "--" in cmd_str:
+            rollback_calls.append("checkout-restore")
+            return CompletedProcess(cmd, 0, "", "")
+        if "clean" in cmd_str:
+            rollback_calls.append("clean")
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "main" in cmd_str:
+            rollback_calls.append("checkout-main")
+            return CompletedProcess(cmd, 0, "", "")
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/claude"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 1
+
+    # Rollback was called
+    assert "reset" in rollback_calls
+    assert "checkout-main" in rollback_calls
+
+    # Backlog updated to design_failed with retry_count=1
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "design_failed"
+    assert idea.get("retry_count", 0) == 1
+
+
+def test_daily_flow_review_failure_terminal(pipeline_module, tmp_path: Path):
+    """Review failure sets review_failed (terminal, no retry_count increment)."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    design_path = tmp_path / pipeline_module.DESIGN_SCRIPT
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    design_path.write_text("# placeholder", encoding="utf-8")
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, "[]", "")
+        if "branch" in cmd_str and "-D" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "-b" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "build_design_prompt" in cmd_str:
+            return CompletedProcess(cmd, 0, "prompt", "")
+        if "claude" in cmd_str and "-p" in cmd_str:
+            skill_dir = tmp_path / "skills" / "test-new-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text("---\nname: test-new-skill\n---\n")
+            return CompletedProcess(cmd, 0, "", "")
+        # git diff / ls-files (no unexpected changes)
+        if "diff" in cmd_str and "--name-only" in cmd_str and "HEAD" in cmd_str:
+            return CompletedProcess(cmd, 0, "skills/test-new-skill/SKILL.md\n", "")
+        if "ls-files" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # reviewer returns low score
+        if "run_dual_axis_review" in cmd_str:
+            report_dir = tmp_path / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report = {"auto_review": {"score": 30, "improvement_items": ["fix this"]}}
+            report_path = report_dir / "skill_review_test-new-skill_2026.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            return CompletedProcess(cmd, 0, "", "")
+        # other git operations
+        return CompletedProcess(cmd, 0, "", "")
+
+    import json
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/claude"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 1
+
+    # review_failed is terminal
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "review_failed"
+    # review_failed does NOT increment retry_count
+    assert idea.get("retry_count", 0) == 0
+
+
+def test_daily_flow_dry_run_no_side_effects(pipeline_module, tmp_path: Path):
+    """Dry-run: no branch creation, no backlog changes, no file creation."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    # Record original backlog
+    original_backlog = pipeline_module.load_backlog(tmp_path)
+    original_status = original_backlog["ideas"][0].get("status", "pending")
+
+    rc = pipeline_module.run_daily(tmp_path, dry_run=True)
+    assert rc == 0
+
+    # Backlog unchanged
+    new_backlog = pipeline_module.load_backlog(tmp_path)
+    assert new_backlog["ideas"][0].get("status", "pending") == original_status
+
+    # No skill directory created
+    skill_dir = tmp_path / "skills" / "test-new-skill"
+    assert not skill_dir.exists()
+
+    # State recorded dry_run
+    state = pipeline_module.load_state(tmp_path)
+    assert state["history"][-1]["dry_run"] is True
+
+    # Summary file has dry-run tag
+    summary_files = list((tmp_path / pipeline_module.SUMMARY_DIR).glob("*_daily.md"))
+    assert len(summary_files) >= 1
+    content = summary_files[0].read_text(encoding="utf-8")
+    assert "dry-run" in content
+
+
+def test_daily_flow_lock_conflict(pipeline_module, tmp_path: Path):
+    """Lock held by current process -> rc=0."""
+    lock_path = tmp_path / pipeline_module.LOCK_FILE
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+
+    rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+    assert rc == 0
+
+    lock_path.unlink()
+
+
+def test_daily_flow_existing_pr(pipeline_module, tmp_path: Path):
+    """Existing PR causes skip with rc=0."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # gh pr list returns match
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, '[{"number": 42}]', "")
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/gh"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 0
+
+
+def test_daily_flow_stale_branch_cleaned(pipeline_module, tmp_path: Path):
+    """Stale local branch is deleted before checkout -b."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    branch_d_called = [False]
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, "[]", "")
+        # branch -D is called before checkout -b
+        if "branch" in cmd_str and "-D" in cmd_str and "skill-generation" in cmd_str:
+            branch_d_called[0] = True
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "-b" in cmd_str:
+            assert branch_d_called[0], "branch -D should be called before checkout -b"
+            return CompletedProcess(cmd, 0, "", "")
+        if "build_design_prompt" in cmd_str:
+            return CompletedProcess(cmd, 0, "prompt", "")
+        # claude fails to avoid full flow
+        if "claude" in cmd_str and "-p" in cmd_str:
+            return CompletedProcess(cmd, 1, "", "error")
+        return CompletedProcess(cmd, 0, "", "")
+
+    design_path = tmp_path / pipeline_module.DESIGN_SCRIPT
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    design_path.write_text("# placeholder", encoding="utf-8")
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/claude"),
+    ):
+        pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert branch_d_called[0]
+
+
+# -- Daily flow: update_backlog_status tests --
+
+
+def test_update_backlog_status_atomic_with_attempted_at(pipeline_module, tmp_path: Path):
+    """Atomic update sets status, attempted_at, and retry_count."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    pipeline_module.update_backlog_status(tmp_path, "raw_001", "design_failed")
+
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "design_failed"
+    assert idea["attempted_at"] is not None
+    assert idea["retry_count"] == 1
+
+
+# -- Daily flow: review_and_improve tests --
+
+
+def test_review_and_improve_final_with_tests(pipeline_module, tmp_path: Path):
+    """Final scoring pass uses skip_tests=False."""
+    skip_tests_values = []
+
+    def fake_auto_score(project_root, skill_name, skip_tests=True):
+        skip_tests_values.append(skip_tests)
+        return {"auto_review": {"score": 85, "improvement_items": []}}
+
+    with patch.object(pipeline_module, "run_auto_score", fake_auto_score):
+        passed, report = pipeline_module.review_and_improve(tmp_path, "test-skill")
+
+    assert passed is True
+    # First call skip_tests=True, second call skip_tests=False (final verification)
+    assert skip_tests_values == [True, False]
+
+
+# -- Daily flow: _check_unexpected_changes tests --
+
+
+def test_check_unexpected_changes_allows_reports(pipeline_module, tmp_path: Path):
+    """Changes in reports/ are allowed."""
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+        if "diff" in cmd_str and "--name-only" in cmd_str and "HEAD" in cmd_str:
+            return CompletedProcess(
+                cmd,
+                0,
+                "skills/my-skill/SKILL.md\nreports/skill_review_my-skill.json\n",
+                "",
+            )
+        if "ls-files" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        return CompletedProcess(cmd, 0, "", "")
+
+    with patch.object(pipeline_module.subprocess, "run", fake_run):
+        result = pipeline_module._check_unexpected_changes(tmp_path, "my-skill")
+
+    assert result is True
+
+
+def test_check_unexpected_changes_detects_outside(pipeline_module, tmp_path: Path):
+    """Changes outside allowed paths return False."""
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+        if "diff" in cmd_str and "--name-only" in cmd_str and "HEAD" in cmd_str:
+            return CompletedProcess(
+                cmd,
+                0,
+                "skills/my-skill/SKILL.md\nscripts/some_other_file.py\n",
+                "",
+            )
+        if "ls-files" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        return CompletedProcess(cmd, 0, "", "")
+
+    with patch.object(pipeline_module.subprocess, "run", fake_run):
+        result = pipeline_module._check_unexpected_changes(tmp_path, "my-skill")
+
+    assert result is False
+
+
+# -- Daily flow: existing PR sets pr_open --
+
+
+def test_daily_flow_existing_pr_sets_pr_open(pipeline_module, tmp_path: Path):
+    """Existing PR transitions backlog to pr_open."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, '[{"number": 99}]', "")
+        return CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/gh"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 0
+
+    # Backlog should be pr_open
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "pr_open"
+
+
+# -- Daily flow: unexpected changes preserves branch --
+
+
+def test_daily_flow_unexpected_changes_preserves_branch(pipeline_module, tmp_path: Path):
+    """Unexpected changes: branch preserved, status=unexpected_changes, rc=1."""
+    _setup_daily_backlog(tmp_path, pipeline_module)
+
+    design_path = tmp_path / pipeline_module.DESIGN_SCRIPT
+    design_path.parent.mkdir(parents=True, exist_ok=True)
+    design_path.write_text("# placeholder", encoding="utf-8")
+
+    rollback_calls = []
+
+    def fake_run(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+
+        if "status" in cmd_str and "--porcelain" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "rev-parse" in cmd_str:
+            return CompletedProcess(cmd, 0, "main\n", "")
+        if "pull" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "gh" in cmd_str and "pr" in cmd_str and "list" in cmd_str:
+            return CompletedProcess(cmd, 0, "[]", "")
+        if "branch" in cmd_str and "-D" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "checkout" in cmd_str and "-b" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        if "build_design_prompt" in cmd_str:
+            return CompletedProcess(cmd, 0, "prompt", "")
+        if "claude" in cmd_str and "-p" in cmd_str:
+            skill_dir = tmp_path / "skills" / "test-new-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text("---\nname: test-new-skill\n---\n")
+            return CompletedProcess(cmd, 0, "", "")
+        # Report unexpected changes outside skill dir
+        if "diff" in cmd_str and "--name-only" in cmd_str and "HEAD" in cmd_str:
+            return CompletedProcess(
+                cmd,
+                0,
+                "skills/test-new-skill/SKILL.md\nCLAUDE.md\n",
+                "",
+            )
+        if "ls-files" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        # Track rollback calls (should NOT be called)
+        if "reset" in cmd_str:
+            rollback_calls.append("reset")
+        if "checkout" in cmd_str and "main" in cmd_str:
+            return CompletedProcess(cmd, 0, "", "")
+        return CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(pipeline_module.subprocess, "run", fake_run),
+        patch.object(pipeline_module.shutil, "which", return_value="/usr/bin/claude"),
+    ):
+        rc = pipeline_module.run_daily(tmp_path, dry_run=False)
+
+    assert rc == 1
+
+    # Rollback should NOT be called (branch preserved for inspection)
+    assert "reset" not in rollback_calls
+
+    # Status should be unexpected_changes
+    backlog = pipeline_module.load_backlog(tmp_path)
+    idea = backlog["ideas"][0]
+    assert idea["status"] == "unexpected_changes"
+
+
+# -- Daily flow: write_daily_generation_summary test --
+
+
+def test_write_daily_generation_summary(pipeline_module, tmp_path: Path):
+    """Summary MD file is created with expected content."""
+    idea = _make_idea("raw_001", "test-skill", 80)
+    report = {"auto_review": {"score": 85}}
+    pr_url = "https://github.com/test/pr/1"
+
+    pipeline_module.write_daily_generation_summary(tmp_path, idea, "test-skill", report, pr_url)
+
+    summary_files = list((tmp_path / pipeline_module.SUMMARY_DIR).glob("*_daily.md"))
+    assert len(summary_files) == 1
+    content = summary_files[0].read_text(encoding="utf-8")
+    assert "test-skill" in content
+    assert "85/100" in content
+    assert pr_url in content

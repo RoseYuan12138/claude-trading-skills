@@ -377,6 +377,12 @@ Curated Claude skills for equity investors and traders. Each skill bundles promp
   - Supports full-width Japanese characters (％, 〜), range notation (50-55%), and year inference for dates without explicit year.
   - No API key required — works offline on local markdown files.
 
+- **Skill Designer** (`skill-designer`)
+  - Generates Claude CLI prompts for designing new skills from structured idea specifications.
+  - Embeds repository conventions (structure guide, quality checklist, SKILL.md template) into the prompt.
+  - Lists existing skills to prevent duplication. Used by the skill auto-generation pipeline's daily flow.
+  - No API key required.
+
 - **Dual-Axis Skill Reviewer** (`dual-axis-skill-reviewer`)
   - Reviews skill quality using a dual-axis method: deterministic auto scoring (structure, workflow, execution safety, artifacts, tests) and optional LLM deep review.
   - 5-category auto axis (0-100): Metadata & Use Case (20), Workflow Coverage (25), Execution Safety & Reproducibility (25), Supporting Artifacts (10), Test Health (20).

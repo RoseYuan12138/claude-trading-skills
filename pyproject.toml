@@ -70,6 +70,7 @@ testpaths = [
     "skills/edge-strategy-reviewer/scripts/tests",
     "skills/edge-pipeline-orchestrator/scripts/tests",
     "skills/skill-idea-miner/scripts/tests",
+    "skills/skill-designer/scripts/tests",
 ]
 
 [tool.bandit]
