@@ -26,6 +26,28 @@ Prepare holding-level inputs:
 - `account_type`
 - `hold_days_in_window` (if available)
 
+### Expected JSON Input Format
+
+```json
+{
+  "holdings": [
+    {
+      "ticker": "JNJ",
+      "instrument_type": "stock",
+      "account_type": "taxable",
+      "security_type": "common",
+      "hold_days_in_window": 75
+    },
+    {
+      "ticker": "O",
+      "instrument_type": "reit",
+      "account_type": "ira",
+      "hold_days_in_window": 100
+    }
+  ]
+}
+```
+
 For deterministic output artifacts, provide JSON input and run:
 
 ```bash
@@ -34,7 +56,7 @@ python3 skills/kanchi-dividend-us-tax-accounting/scripts/build_tax_planning_shee
   --output-dir reports/
 ```
 
-## Guardrail
+## Guardrails
 
 Always state this clearly: tax outcomes depend on individual facts and jurisdiction.
 Treat this skill as planning support, then escalate final filing decisions to a tax professional.
@@ -94,6 +116,13 @@ Always output:
 3. Open-risk checklist for unresolved tax assumptions.
 4. Optional generated artifacts from
 `skills/kanchi-dividend-us-tax-accounting/scripts/build_tax_planning_sheet.py`.
+
+## Cadence
+
+Use this minimum rhythm:
+- Annually (60 min): full tax planning memo with account-location review.
+- Quarterly (15 min): refresh holding-period status for recent acquisitions.
+- Ad-hoc: rerun after material position changes, REIT/BDC additions, or triggered reviews from `kanchi-dividend-review-monitor`.
 
 ## Multi-Skill Handoff
 
