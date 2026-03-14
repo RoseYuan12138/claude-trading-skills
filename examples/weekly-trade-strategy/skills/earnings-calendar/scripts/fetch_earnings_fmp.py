@@ -59,7 +59,9 @@ class FMPEarningsCalendar:
         params = {"from": start_date, "to": end_date}
 
         try:
-            response = requests.get(url, params=params, headers={"apikey": self.api_key}, timeout=30)
+            response = requests.get(
+                url, params=params, headers={"apikey": self.api_key}, timeout=30
+            )
 
             if response.status_code == 401:
                 print("❌ ERROR: Invalid API key", file=sys.stderr)
@@ -120,7 +122,9 @@ class FMPEarningsCalendar:
             params = {}
 
             try:
-                response = requests.get(url, params=params, headers={"apikey": self.api_key}, timeout=30)
+                response = requests.get(
+                    url, params=params, headers={"apikey": self.api_key}, timeout=30
+                )
                 response.raise_for_status()
 
                 for profile in response.json():
