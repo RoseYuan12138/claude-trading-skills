@@ -96,7 +96,8 @@ def generate_markdown_report(
         lines.append("|---|--------|---------|-------|------|-------|------------|")
         for i, stock in enumerate(results, 1):
             sym = stock.get("symbol", "?")
-            quality = f"{stock.get('composite_score', 0):.0f} ({stock.get('rating', 'N/A')})"
+            q_rating = stock.get("quality_rating", stock.get("rating", "N/A"))
+            quality = f"{stock.get('composite_score', 0):.0f} ({q_rating})"
             state = stock.get("execution_state", "—")
             ptype = stock.get("pattern_type", "—")
             price = stock.get("price", 0) or 0
@@ -219,16 +220,17 @@ def _format_stock_entry(rank: int, stock: dict) -> list[str]:
     # Header — symbol + company name only
     lines.append(f"### {rank}. {stock['symbol']} - {stock.get('company_name', 'N/A')}")
 
-    # 2-axis quality line: Quality | State | Type
-    rating = stock.get("rating", "N/A")
+    # 2-axis quality line: Quality (pre-cap) | State | Type + final rating
+    quality_rating = stock.get("quality_rating", stock.get("rating", "N/A"))
+    final_rating = stock.get("rating", "N/A")
     composite = stock.get("composite_score", 0)
     execution_state = stock.get("execution_state", "—")
     pattern_type = stock.get("pattern_type", "—")
     cap_note = ""
     if stock.get("state_cap_applied"):
-        cap_note = " ★"
+        cap_note = f" ★ → {final_rating}"
     lines.append(
-        f"**Quality:** {composite:.0f}/100 ({rating}){cap_note} | "
+        f"**Quality:** {composite:.0f}/100 ({quality_rating}){cap_note} | "
         f"**State:** {execution_state} | "
         f"**Type:** {pattern_type}"
     )

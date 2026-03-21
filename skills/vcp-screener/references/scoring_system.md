@@ -209,7 +209,7 @@ Multiple caps can apply simultaneously. The most restrictive (lowest) cap wins:
 
 1. `valid_vcp=False` cap (Developing VCP max)
 2. Execution State cap (per table above)
-3. Wide-and-Loose cap (Strong VCP max)
+3. Wide-and-Loose cap (Developing VCP max)
 
 The final displayed rating reflects all caps. `state_cap_applied=True` indicates at least one cap was applied.
 

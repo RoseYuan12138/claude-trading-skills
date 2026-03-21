@@ -375,6 +375,7 @@ def analyze_stock(
         "price": price,
         "market_cap": market_cap,
         "composite_score": composite["composite_score"],
+        "quality_rating": composite.get("quality_rating", composite["rating"]),
         "rating": composite["rating"],
         "rating_description": composite["rating_description"],
         "guidance": composite["guidance"],
@@ -451,7 +452,7 @@ def compute_entry_ready(
     """
     # State-based immediate rejection
     state = result.get("execution_state")
-    if state in ("Invalid", "Damaged", "Overextended", "Extended"):
+    if state in ("Invalid", "Damaged", "Overextended", "Extended", "Early-post-breakout"):
         return False
 
     valid_vcp = result.get("valid_vcp", False)
@@ -673,6 +674,7 @@ def main():
                 sma200_extension_pct=r.get("sma200_extension_pct"),
             )
             r["composite_score"] = composite["composite_score"]
+            r["quality_rating"] = composite.get("quality_rating", composite["rating"])
             r["rating"] = composite["rating"]
             r["rating_description"] = composite["rating_description"]
             r["guidance"] = composite["guidance"]
