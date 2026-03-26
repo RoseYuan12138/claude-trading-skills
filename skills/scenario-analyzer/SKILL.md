@@ -34,6 +34,12 @@ description: |
 /scenario-analyzer "OPEC+ agrees to cut oil production by 2 million barrels per day"
 ```
 
+## Prerequisites
+
+- **API Keys**: なし（WebSearch/WebFetchのみ使用）
+- **MCP Servers**: なし
+- **Dependencies**: scenario-analyst および strategy-reviewer エージェントが Task tool で利用可能であること
+
 ## Architecture
 
 ```
@@ -258,6 +264,22 @@ Agent tool:
 4. **プロジェクトルートに直接保存しないこと**
 
 ---
+
+## Output
+
+このスキルは以下のファイルを生成します：
+
+| ファイル | 形式 | 説明 |
+|---------|------|------|
+| `reports/scenario_analysis_<topic>_YYYYMMDD.md` | Markdown | 包括的なシナリオ分析レポート |
+
+**出力内容:**
+- 関連ニュース記事リスト
+- Base/Bull/Bear 3シナリオ（確率配分付き）
+- セクター影響分析（1次/2次/3次）
+- ポジティブ/ネガティブ銘柄推奨
+- セカンドオピニオン・レビュー
+- 最終投資判断・示唆
 
 ## Resources
 
