@@ -494,6 +494,14 @@ def apply_improvement(
     try:
         # Build improvement prompt
         improvements = report["final_review"].get("improvement_items", [])
+        if not improvements:
+            logger.warning(
+                "No improvement_items for '%s' (score=%d); skipping to avoid unguided changes.",
+                skill_name,
+                pre_score,
+            )
+            _rollback(project_root, skill_name, branch_name)
+            return None
         prompt = (
             f"Improve the skill '{skill_name}' in skills/{skill_name}/ based on these findings:\n\n"
             + "\n".join(f"- {item}" for item in improvements[:10])

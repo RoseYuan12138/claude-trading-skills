@@ -502,6 +502,29 @@ def test_apply_improvement_returns_report(loop_module, tmp_path: Path, monkeypat
     assert result["final_review"]["score"] == 85
 
 
+def test_apply_improvement_skips_empty_improvement_items(loop_module, tmp_path: Path, monkeypatch):
+    """When improvement_items is empty, skip improvement to avoid unguided changes."""
+    monkeypatch.setattr(loop_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(loop_module, "check_existing_pr", lambda *a, **kw: False)
+
+    rollback_called = []
+    monkeypatch.setattr(
+        loop_module.subprocess,
+        "run",
+        lambda cmd, **kw: __import__("subprocess").CompletedProcess(cmd, 0, "", ""),
+    )
+    monkeypatch.setattr(loop_module, "_rollback", lambda *a, **kw: rollback_called.append(True))
+
+    report = {
+        "auto_review": {"score": 88},
+        "final_review": {"score": 88, "improvement_items": [], "findings": []},
+    }
+    result = loop_module.apply_improvement(tmp_path, "test-skill", report, dry_run=False)
+
+    assert result is None, "Should return None when improvement_items is empty"
+    assert rollback_called, "Should call _rollback when skipping"
+
+
 def test_apply_improvement_uses_auto_score_for_comparison(loop_module, tmp_path: Path, monkeypatch):
     """Quality gate compares auto_review scores, not final_review (LLM-merged)."""
     # post-improvement report: auto=78
