@@ -11,7 +11,7 @@ import math
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -62,8 +62,7 @@ class TestRsiCalculation:
     def test_rsi_function_exists(self, mod):
         """The script must expose a callable that computes RSI."""
         candidates = [
-            name for name in dir(mod)
-            if "rsi" in name.lower() and callable(getattr(mod, name))
+            name for name in dir(mod) if "rsi" in name.lower() and callable(getattr(mod, name))
         ]
         assert candidates, "No RSI function found in the script"
 
@@ -118,16 +117,14 @@ class TestDividendCagr:
         return _load_script()
 
     def test_cagr_function_exists(self, mod):
-        candidates = [
-            name for name in dir(mod)
-            if "cagr" in name.lower() and callable(getattr(mod, name))
-        ]
-        assert candidates, "No CAGR function found in the script"
+        assert hasattr(mod, "StockAnalyzer"), "StockAnalyzer class not found"
+        assert hasattr(mod.StockAnalyzer, "calculate_cagr"), (
+            "calculate_cagr not found in StockAnalyzer"
+        )
 
     def test_cagr_doubles_in_six_years(self, mod):
         """12% CAGR should double the dividend in ~6 years."""
-        candidates = [n for n in dir(mod) if "cagr" in n.lower() and callable(getattr(mod, n))]
-        fn = getattr(mod, candidates[0])
+        fn = mod.StockAnalyzer.calculate_cagr
         try:
             # Dividend goes from 1.0 to 2.0 over 6 years ≈ 12.2% CAGR
             result = fn(1.0, 2.0, 6)
@@ -139,8 +136,7 @@ class TestDividendCagr:
 
     def test_cagr_zero_years_safe(self, mod):
         """CAGR with zero years should not raise ZeroDivisionError."""
-        candidates = [n for n in dir(mod) if "cagr" in n.lower() and callable(getattr(mod, n))]
-        fn = getattr(mod, candidates[0])
+        fn = mod.StockAnalyzer.calculate_cagr
         try:
             result = fn(1.0, 2.0, 0)
             assert result is None or math.isnan(result) or result == 0
@@ -163,13 +159,15 @@ class TestScriptStructure:
 
     def test_script_has_main_guard(self):
         source = SCRIPT_PATH.read_text()
-        assert 'if __name__ == "__main__"' in source or "if __name__ == '__main__'" in source, \
+        assert 'if __name__ == "__main__"' in source or "if __name__ == '__main__'" in source, (
             "Script should have a __main__ guard"
+        )
 
     def test_script_references_fmp_api(self):
         source = SCRIPT_PATH.read_text()
-        assert "FMP_API_KEY" in source or "fmp_api_key" in source or "fmp-api-key" in source, \
+        assert "FMP_API_KEY" in source or "fmp_api_key" in source or "fmp-api-key" in source, (
             "Script should reference FMP_API_KEY"
+        )
 
     def test_script_references_rsi(self):
         source = SCRIPT_PATH.read_text()
@@ -178,5 +176,4 @@ class TestScriptStructure:
     def test_output_dir_argument(self):
         """Script should accept --output-dir for report placement."""
         source = SCRIPT_PATH.read_text()
-        assert "output" in source.lower(), \
-            "Script should support an output directory argument"
+        assert "output" in source.lower(), "Script should support an output directory argument"
