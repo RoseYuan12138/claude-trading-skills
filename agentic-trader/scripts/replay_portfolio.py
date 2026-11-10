@@ -138,14 +138,20 @@ def render(start, end, holds, results, closes, main_name) -> str:
             else f"{i.purpose.value} {i.qty:g} {i.symbol} at next open"
         )
         why = i.note or ""
-        acts_by_day.setdefault(a.date, []).append(f"[{i.source}] {what}" + (f" ({why})" if why else ""))
+        acts_by_day.setdefault(a.date, []).append(
+            f"[{i.source}] {what}" + (f" ({why})" if why else "")
+        )
     wake_by_day = {e.date: e for e in res.agent_log}
     for d, _ in res.equity_curve:
         items = fills_by_day.get(d, []) + acts_by_day.get(d, [])
         if d in wake_by_day:
             items.insert(0, "**Claude woken**: " + "; ".join(wake_by_day[d].triggers))
         if items:
-            lines.append(f"- **{d}** (closes: " + ", ".join(f"{s} {closes[d][s]:.2f}" for s, _ in holds) + ")")
+            lines.append(
+                f"- **{d}** (closes: "
+                + ", ".join(f"{s} {closes[d][s]:.2f}" for s, _ in holds)
+                + ")"
+            )
             lines += [f"  - {x}" for x in items]
     lines += [
         "",
