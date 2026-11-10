@@ -1,0 +1,34 @@
+# Mapping from Robinhood Trading MCP tools to risk-gate fields.
+#
+# PLACEHOLDER VALUES: Robinhood has not published the MCP tool schemas. Before going
+# live, list the real tools on your machine (e.g. ask Claude Code "list the robinhood
+# MCP tools with their input schemas") and fix every name below.
+# Any tool on this server that is not listed as an order tool, a cancel tool or a
+# read-only tool is BLOCKED.
+
+# Claude Code names MCP tools mcp__<server-name>__<tool>; <server-name> is whatever you
+# passed to `claude mcp add`.
+server_prefix: mcp__robinhood
+
+read_only_prefixes: [get, list, search, fetch, view, describe]
+
+# Cancelling a protective stop removes protection. "allow" is needed when the MCP has no
+# replace-order tool (cancel + re-place); the Layer 1 daemon then alerts on any
+# position left without a stop.
+cancel_prefixes: [cancel]
+cancel_policy: allow
+
+# tool name (without prefix) -> argument names in that tool's input
+order_tools:
+  place_order:
+    symbol: symbol
+    side: side
+    quantity: quantity
+    notional: amount            # dollar-based orders
+    order_type: type
+    limit_price: limit_price
+    stop_price: stop_price
+    attached_stop_price: stop_loss_price
+
+# Entries and stop changes are blocked if state/account_snapshot.json is older than this.
+snapshot_max_age_minutes: 15

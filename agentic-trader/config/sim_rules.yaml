@@ -1,0 +1,12 @@
+# Risk rules used by the simulator (sized for a $100k test account).
+# Keys map 1:1 to agentic_trader.risk_gate.RiskRules; unknown keys are rejected.
+max_order_notional: 25000
+max_position_pct: 20
+max_open_positions: 8
+risk_per_trade_pct: 1.0
+daily_loss_limit_pct: 3.0
+max_entries_per_day: 3
+require_stop_on_entry: true
+stop_only_tighten: true
+allowed_symbols: []
+blocked_symbols: []

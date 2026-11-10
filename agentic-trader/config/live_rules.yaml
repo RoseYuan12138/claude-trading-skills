@@ -1,0 +1,13 @@
+# Live risk limits enforced by the PreToolUse hook. Start small.
+# Also keep the Robinhood agent account funded only with money you can afford to lose:
+# the account boundary is the hardest limit of all.
+max_order_notional: 2000
+max_position_pct: 20
+max_open_positions: 5
+risk_per_trade_pct: 1.0
+daily_loss_limit_pct: 3.0
+max_entries_per_day: 2
+require_stop_on_entry: true
+stop_only_tighten: true
+allowed_symbols: []     # e.g. [SPY, QQQ, AAPL, MSFT] to restrict the universe
+blocked_symbols: []
