@@ -36,6 +36,24 @@ class SimConfig:
     trend_sma: int = 50
     atr_period: int = 14
     slippage_bps: float = 5.0
+    # Replay mode: bars before start_date only warm up indicators; initial_positions
+    # (symbol -> shares) are bought at the start_date close, funded on top of initial_cash.
+    start_date: date | None = None
+    initial_positions: dict[str, float] = field(default_factory=dict)
+    enable_entries: bool = True
+
+
+@dataclass
+class Action:
+    date: date
+    intent: OrderIntent
+
+
+@dataclass
+class AgentLogEntry:
+    date: date
+    triggers: list[str]
+    rationale: list[str]
 
 
 @dataclass
@@ -68,6 +86,8 @@ class SimResult:
     chaos_injected: int = 0
     fills: list[Fill] = field(default_factory=list)
     open_at_end: int = 0
+    actions: list[Action] = field(default_factory=list)
+    agent_log: list[AgentLogEntry] = field(default_factory=list)
 
     def metrics(self) -> dict[str, float]:
         eq = [e for _, e in self.equity_curve]
@@ -188,6 +208,7 @@ class _Simulator:
             )
             return False
         res.executed_by_source[intent.source] += 1
+        res.actions.append(Action(d, intent))
         return True
 
     # -------------------------------------------------------------------- loop
@@ -196,6 +217,10 @@ class _Simulator:
         self.result.scenario = name
         by_date = {s: {b.date: b for b in bars} for s, bars in self.data.items()}
         dates = sorted({d for idx in by_date.values() for d in idx})
+        start = self.cfg.start_date
+        if start is not None and start not in dates:
+            raise ValueError(f"start_date {start} has no bar in the data")
+        started = start is None
         peak = self.cfg.initial_cash
         for d in dates:
             self.today = d
@@ -209,6 +234,13 @@ class _Simulator:
                 self.atrs[s] = self.atr_calc[s].update(bar)
                 self.closes[s] = bar.close
 
+            if not started:
+                if d < start:
+                    continue  # warm-up: indicators only
+                started = True
+                self._seed_positions()
+                self.prev_equity = peak = self.broker.equity(self.closes)
+
             self.equity = self.broker.equity(self.closes)
             peak = max(peak, self.equity)
             drawdown_pct = (1 - self.equity / peak) * 100
@@ -216,7 +248,7 @@ class _Simulator:
             self._trail_stops()
             if self.agent is not None:
                 self._maybe_wake_agent(drawdown_pct)
-            if not self.halted():
+            if self.cfg.enable_entries and not self.halted():
                 self._enter_breakouts()
 
             self.result.equity_curve.append((d, self.equity))
@@ -224,6 +256,16 @@ class _Simulator:
         self.result.chaos_injected = getattr(self.agent, "injected", 0)
         self.result.open_at_end = len(self.broker.positions)
         return self.result
+
+    def _seed_positions(self) -> None:
+        for s, qty in self.cfg.initial_positions.items():
+            if s not in self.closes:
+                raise ValueError(f"no price for initial position {s}")
+            close, atr = self.closes[s], self.atrs.get(s)
+            stop = self.policy.initial_stop(close, atr) if atr else None
+            risk = close - stop if stop is not None else self.cfg.fallback_risk_atr * (atr or 0)
+            self.broker.cash += qty * close  # holdings are funded on top of initial_cash
+            self.broker.seed_position(s, qty, close, self.today, risk or None)
 
     def _trail_stops(self) -> None:
         for s, pos in list(self.broker.positions.items()):
@@ -258,6 +300,9 @@ class _Simulator:
         self.result.llm_wakeups += 1
         ctx = AgentContext(self.today, triggers, snap, self.atrs, dict(self.closes), self.calendar)
         decision = self.agent.decide(ctx)
+        self.result.agent_log.append(
+            AgentLogEntry(self.today, [t.detail for t in triggers], list(decision.rationale))
+        )
         if decision.halt_days:
             until = self.today + timedelta(days=decision.halt_days)
             self.halted_until = max(self.halted_until or until, until)

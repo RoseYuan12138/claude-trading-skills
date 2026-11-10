@@ -144,6 +144,17 @@ class SimBroker:
             o.qty * prices.get(o.symbol, 0.0) for o in self.orders.values() if o.kind == "entry"
         )
 
+    def seed_position(
+        self, symbol: str, qty: float, price: float, when: date, risk_per_share: float | None
+    ) -> None:
+        """Start with an existing holding (replay mode), bought at ``price`` on ``when``."""
+        if symbol in self.positions:
+            raise ValueError(f"{symbol} already held")
+        self.cash -= qty * price
+        risk = risk_per_share if risk_per_share and risk_per_share > 0 else price * 0.08
+        self.positions[symbol] = SimPosition(qty, price, when, risk, price)
+        self.fills.append(Fill(when, symbol, Side.BUY, qty, price, "seed"))
+
     # --------------------------------------------------------------- matching
 
     def process_bar(self, symbol: str, bar: Bar) -> list[Fill]:

@@ -35,6 +35,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/hook.py` + `scripts/risk_gate_hook.py` | Claude Code PreToolUse hook for the Robinhood MCP |
 | `agentic_trader/sim/` | Daily-bar broker (gap-aware stop fills), engine, synthetic market, report |
 | `scripts/run_simulation.py` | Scenario comparison CLI |
+| `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |
 
 ## Quick start
@@ -49,6 +50,13 @@ python3 agentic-trader/scripts/run_simulation.py --seeds 5 --output-dir reports/
 # real data: one <SYMBOL>.csv per symbol (date,open,high,low,close,volume),
 # optional events JSON: [{"date": "2026-01-28", "kind": "earnings", "symbol": "AAPL", "importance": 3}]
 python3 agentic-trader/scripts/run_simulation.py --data-dir data/ohlcv --calendar data/events.json
+```
+
+Replay real holdings (bought at the `--start` close; earlier bars only warm up ATR):
+
+```bash
+python3 agentic-trader/scripts/replay_portfolio.py --data-dir data/ohlcv --calendar data/events.json \
+    --start 2026-10-06 --hold NVDA:100 --hold INTC:100 --hold AMD:100
 ```
 
 ## What the first simulation says

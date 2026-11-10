@@ -1,11 +1,12 @@
 from datetime import date
 
+import pytest
 from agentic_trader.agent import ChaosAgent, RuleBasedAgentProxy
 from agentic_trader.events import EventCalendar
 from agentic_trader.models import Bar
 from agentic_trader.risk_gate import RiskRules
 from agentic_trader.sim.data import business_days, generate_market, load_csv_dir
-from agentic_trader.sim.engine import run_simulation
+from agentic_trader.sim.engine import SimConfig, run_simulation
 from agentic_trader.sim.report import aggregate, default_scenarios, render_markdown, run_batch
 from agentic_trader.stops import AtrTrailingStop, NoStop
 
@@ -100,3 +101,51 @@ def test_batch_report_renders():
         },
     )
     assert "agent+chaos (NO gate)" in md and "| Scenario |" in md
+
+
+def _trend_bars(n=80, start=date(2024, 1, 1), drift=0.5, crash_at=None):
+    days = business_days(start, n)
+    out, p = [], 100.0
+    for i, d in enumerate(days):
+        p = p * 0.7 if crash_at is not None and i == crash_at else p + drift
+        out.append(Bar(d, p, p + 1, p - 1, p, 1e6))
+    return days, out
+
+
+def test_replay_seeds_holdings_at_start_close_and_makes_no_new_entries():
+    days, bars = _trend_bars()
+    start = days[40]
+    cfg = SimConfig(
+        initial_cash=0, start_date=start, initial_positions={"X": 10}, enable_entries=False
+    )
+    res = run_simulation(
+        {"X": bars, "Y": _trend_bars()[1]}, EventCalendar(), RULES, AtrTrailingStop(3), config=cfg
+    )
+    assert res.equity_curve[0] == (start, 10 * bars[40].close)
+    assert [f.kind for f in res.fills] == ["seed"]
+    first_stop = next(a for a in res.actions if a.intent.purpose.value == "stop_update")
+    assert first_stop.date == start and first_stop.intent.stop_price < bars[40].close
+
+
+def test_replay_stop_exits_on_crash_and_logs_actions():
+    days, bars = _trend_bars(crash_at=60)
+    cfg = SimConfig(
+        initial_cash=0, start_date=days[40], initial_positions={"X": 10}, enable_entries=False
+    )
+    res = run_simulation({"X": bars}, EventCalendar(), RULES, AtrTrailingStop(3), config=cfg)
+    assert [t.exit_kind for t in res.trades] == ["stop"]
+    assert res.trades[0].exit_date == days[60] and res.trades[0].gapped_through_stop
+    t = res.trades[0]
+    assert res.equity_curve[-1][1] == pytest.approx(t.exit_price * 10)  # all cash after exit
+    assert any(a.intent.note == "trail" for a in res.actions)
+
+
+def test_replay_requires_start_date_bar():
+    days, bars = _trend_bars()
+    cfg = SimConfig(start_date=date(2030, 1, 1), initial_positions={"X": 1})
+    try:
+        run_simulation({"X": bars}, EventCalendar(), RULES, AtrTrailingStop(3), config=cfg)
+    except ValueError as e:
+        assert "start_date" in str(e)
+    else:
+        raise AssertionError("expected ValueError")
