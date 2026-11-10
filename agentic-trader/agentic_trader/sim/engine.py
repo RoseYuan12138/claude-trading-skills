@@ -41,6 +41,12 @@ class SimConfig:
     start_date: date | None = None
     initial_positions: dict[str, float] = field(default_factory=dict)
     enable_entries: bool = True
+    # Entry filters (all off by default)
+    regime_symbol: str | None = None  # e.g. "SPY": no new entries while it closes below its SMA
+    regime_sma: int = 200
+    earnings_blackout_days: int = 0  # calendar days: skip entries with earnings this close
+    volume_confirm_mult: float = 0.0  # breakout volume must be >= mult x 20-day average
+    untradable: tuple[str, ...] = ()  # e.g. a benchmark kept only for the regime filter
 
 
 @dataclass
@@ -155,6 +161,8 @@ class _Simulator:
         config: SimConfig | None,
     ):
         self.cfg = config or SimConfig()
+        if self.cfg.regime_symbol and self.cfg.regime_symbol not in data:
+            raise ValueError(f"regime_symbol {self.cfg.regime_symbol} is not in the data")
         self.data = data
         self.calendar = calendar
         self.rules = rules
@@ -309,13 +317,42 @@ class _Simulator:
         for intent in decision.intents:
             self.route(intent)
 
+    def _regime_ok(self) -> bool:
+        cfg = self.cfg
+        if not cfg.regime_symbol:
+            return True
+        h = self.history[cfg.regime_symbol]
+        if len(h) < cfg.regime_sma:
+            return True  # not enough history yet: do not filter
+        sma = sum(b.close for b in h[-cfg.regime_sma :]) / cfg.regime_sma
+        return h[-1].close >= sma
+
+    def _passes_filters(self, s: str, h: list[Bar]) -> bool:
+        cfg = self.cfg
+        if cfg.earnings_blackout_days > 0 and any(
+            e.kind == "earnings"
+            for e in self.calendar.upcoming(self.today, cfg.earnings_blackout_days, [s])
+            if e.symbol == s
+        ):
+            return False
+        if cfg.volume_confirm_mult > 0:
+            window = h[-21:-1]
+            avg = sum(b.volume for b in window) / len(window) if window else 0.0
+            if avg <= 0 or h[-1].volume < cfg.volume_confirm_mult * avg:
+                return False
+        return True
+
     def _enter_breakouts(self) -> None:
         cfg = self.cfg
+        if not self._regime_ok():
+            return
         min_history = max(cfg.breakout_lookback, cfg.trend_sma, cfg.atr_period) + 1
         pending = self.broker.pending_entry_symbols()
         for s in sorted(self.data):
             h = self.history[s]
             if s in self.broker.positions or s in pending or len(h) < min_history:
+                continue
+            if s in cfg.untradable:
                 continue
             atr = self.atrs.get(s)
             if h[-1].date != self.today or not atr:
@@ -324,6 +361,8 @@ class _Simulator:
             prior_high = max(b.high for b in h[-cfg.breakout_lookback - 1 : -1])
             sma = sum(b.close for b in h[-cfg.trend_sma :]) / cfg.trend_sma
             if close <= prior_high or close <= sma:
+                continue
+            if not self._passes_filters(s, h):
                 continue
             stop = self.policy.initial_stop(close, atr)
             risk_ps = close - stop if stop is not None else cfg.fallback_risk_atr * atr

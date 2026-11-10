@@ -128,3 +128,72 @@ def load_csv_dir(data_dir: str | Path, symbols: list[str] | None = None) -> dict
     if not out:
         raise FileNotFoundError(f"no CSV files found in {data_dir}")
     return out
+
+
+ETF_SYMBOLS = frozenset({"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI", "XLK", "SMH", "SOXX"})
+
+
+def _is_quad_witching(d: date) -> bool:
+    return d.month in (3, 6, 9, 12) and d.weekday() == 4 and 15 <= d.day <= 21
+
+
+def infer_earnings_calendar(
+    data: dict[str, list[Bar]],
+    skip: frozenset[str] = ETF_SYMBOLS,
+    volume_mult: float = 1.8,
+    gap_pct: float = 2.0,
+    lookback: int = 50,
+    min_gap: int = 45,
+    cluster_days: int = 3,
+    market_share: float = 0.4,
+) -> EventCalendar:
+    """Reconstruct past earnings dates from price/volume (no free history source).
+
+    Candidate day: volume >= ``volume_mult`` x the median of the previous ``lookback``
+    days AND an overnight gap or close-to-close move of at least ``gap_pct`` %.
+    Dropped: quad-witching days, and days when at least ``market_share`` of the symbols
+    are candidates (market-wide events). Within ``cluster_days`` the highest-volume day
+    wins; reports are at least ``min_gap`` trading days apart. Real report dates are
+    published weeks ahead, so treating these as known in advance is a fair proxy, but
+    expect misses and false positives.
+    """
+    stocks = {s: b for s, b in data.items() if s.upper() not in skip}
+    candidates: dict[str, list[int]] = {}
+    for sym, bars in stocks.items():
+        idx = []
+        for i in range(20, len(bars)):
+            window = sorted(b.volume for b in bars[max(0, i - lookback) : i])
+            median = window[len(window) // 2]
+            if median <= 0 or bars[i].volume < volume_mult * median:
+                continue
+            prev = bars[i - 1].close
+            move = max(abs(bars[i].open / prev - 1), abs(bars[i].close / prev - 1)) * 100
+            if move < gap_pct or _is_quad_witching(bars[i].date):
+                continue
+            idx.append(i)
+        candidates[sym] = idx
+
+    per_day: dict[date, int] = {}
+    for sym, idx in candidates.items():
+        for i in idx:
+            per_day[stocks[sym][i].date] = per_day.get(stocks[sym][i].date, 0) + 1
+    crowded = {
+        d for d, n in per_day.items() if len(stocks) >= 3 and n / len(stocks) >= market_share
+    }
+
+    events: list[Event] = []
+    for sym, idx in candidates.items():
+        bars = stocks[sym]
+        accepted: list[int] = []
+        for i in idx:
+            if bars[i].date in crowded:
+                continue
+            if accepted and i - accepted[-1] <= cluster_days:
+                if bars[i].volume > bars[accepted[-1]].volume:
+                    accepted[-1] = i
+                continue
+            if accepted and i - accepted[-1] < min_gap:
+                continue
+            accepted.append(i)
+        events += [Event(bars[i].date, "earnings", sym, 3) for i in accepted]
+    return EventCalendar(events)

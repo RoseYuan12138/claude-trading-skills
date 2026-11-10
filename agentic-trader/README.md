@@ -39,6 +39,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/pricing.py` | Dependency-free Black-Scholes |
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
+| `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |
@@ -82,6 +83,30 @@ check of the mechanics, not as a forecast:
   concentration paid off in a rising synthetic market.
 - About 19% of stop exits filled at an open below the stop. Stops can't prevent overnight gaps;
   position sizing and de-risking before events are what limit them.
+
+## Entry filters (shares)
+
+`SimConfig` options, all off by default: `regime_symbol` / `regime_sma` (no new entries while
+the benchmark closes below its SMA), `earnings_blackout_days`, `volume_confirm_mult`, and
+`untradable` (keep a benchmark for the filter without trading it). `infer_earnings_calendar`
+rebuilds past report dates from volume spikes plus gaps. It got about 60% of the 2024 dates
+right, so pass a real calendar with `--calendar` when you have one.
+
+Results (`docs/sample_entry_filters.md`; 10 large-cap tech stocks, 2021-09 to 2026-11; Sharpe
+compared on 6 random 8-stock subsets):
+
+| Filter | Return (all) | Max DD (all) | Sharpe (all) | Beats no-filter |
+|---|---:|---:|---:|---:|
+| none | +60% | 14.1% | 0.87 | – |
+| SPY > 50d SMA | +58% | **10.6%** | 0.86 | **6 / 6** |
+| breakout volume >= 1.5x | +47% | **8.1%** | **0.96** | 4 / 6 |
+| SPY > 200d SMA | +52% | 13.7% | 0.80 | 0 / 6 |
+| earnings blackout 7d (inferred dates) | +50% | 13.6% | 0.78 | 0 / 6 |
+| 50d regime + volume (in-sample pick) | +41% | 7.7% | 0.87 | 1 / 6 |
+
+The 50-day regime filter is the one change that helped on every subset: same return, lower
+drawdown. Volume confirmation halves drawdown but also trades and return. The 200-day filter
+reacts too slowly, and stacking filters over-restricts.
 
 ## Options agent (independent entries)
 
