@@ -40,6 +40,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
+| `scripts/run_long_short_sim.py` | Long shares + regime-gated put sleeve backtest |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |
@@ -137,6 +138,21 @@ Stops matter more for options than for shares: without them, 101 of 246 trades l
 of the premium. The edge is thin and depends mostly on what the options cost: the model has no
 IV crush or skew, so real results are likely worse. Capping winners (+100% take profit) and
 debit verticals with these exits both lost money.
+
+### Bearish bets with puts (no stock needed)
+
+`OptionSimConfig(regime_symbol="SPY", regime_sma=50)` allows calls only while SPY is above its
+50-day SMA and puts only while it is below; `allow_calls=False` gives a puts-only sleeve.
+`scripts/run_long_short_sim.py` adds such a sleeve to the long-shares agent.
+
+Result on the same data (`docs/sample_long_short_backtest.md`): **the put sleeve did not
+help.** Puts won 16-20% of the time and lost money in every year except 2024, including the
+2022 bear market. A 10% sleeve left drawdown roughly unchanged (10.6% -> 10.1%) and cut return
+by about 4 points. Wider stops, a stock-price stop, 60 DTE, or no stops at all all still lost.
+The reasons: puts bought after a breakdown pay for already high volatility, and bear-market
+rallies of 5%+ are common, which is all it takes to halve an at-the-money put. Puts are also
+usually priced above this model (skew). In this period the best bear-market defense was simply
+not buying: the 50-day regime filter on longs.
 
 ## Going live on the Mac mini (planned steps)
 

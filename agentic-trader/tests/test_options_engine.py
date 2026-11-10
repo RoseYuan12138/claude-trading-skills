@@ -130,3 +130,55 @@ def test_open_fills_do_not_use_that_days_close():
         sim.run()
         prices.append(sim.positions["X"].entry_price)
     assert prices[0] == pytest.approx(prices[1])
+
+
+# ------------------------------------------------------- regime + direction
+
+
+def _bench(rising: bool, n: int):
+    days = business_days(date(2025, 1, 1), n)
+    return [
+        Bar(
+            d,
+            400 + (i if rising else -i) * 0.5,
+            401 + (i if rising else -i) * 0.5,
+            399 + (i if rising else -i) * 0.5,
+            400 + (i if rising else -i) * 0.5,
+            5e7,
+        )
+        for i, d in enumerate(days)
+    ]
+
+
+def _dirs(x_bars, bench_rising, **cfg):
+    data = {"X": x_bars, "SPY": _bench(bench_rising, len(x_bars))}
+    sim = OptionSimulator(
+        data,
+        RULES,
+        EXITS,
+        OptionSimConfig(regime_symbol="SPY", regime_sma=50, untradable=("SPY",), **cfg),
+    )
+    res = sim.run()
+    return [t.right for t in res.trades] + [p.right for p in sim.positions.values()]
+
+
+def test_regime_gate_calls_only_in_uptrend_puts_only_in_downtrend():
+    up = _flat_then([101 + i for i in range(10)])
+    down = _flat_then([99 - i for i in range(10)])
+    assert _dirs(up, bench_rising=True)[0] is Right.CALL
+    assert _dirs(up, bench_rising=False) == []  # bullish signal, weak market: skip
+    assert _dirs(down, bench_rising=False)[0] is Right.PUT
+    assert _dirs(down, bench_rising=True) == []  # bearish signal, strong market: skip
+
+
+def test_puts_only_sleeve():
+    up = _flat_then([101 + i for i in range(10)])
+    down = _flat_then([99 - i for i in range(10)])
+    assert _dirs(up, bench_rising=True, allow_calls=False) == []
+    assert _dirs(down, bench_rising=False, allow_calls=False)[0] is Right.PUT
+
+
+def test_benchmark_is_not_traded():
+    data = {"SPY": _flat_then([101 + i for i in range(10)])}
+    sim = OptionSimulator(data, RULES, EXITS, OptionSimConfig(untradable=("SPY",)))
+    assert sim.run().trades == [] and not sim.positions

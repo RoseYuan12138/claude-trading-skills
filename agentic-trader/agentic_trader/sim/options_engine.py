@@ -54,7 +54,13 @@ class OptionSimConfig:
     hv_window: int = 20
     atr_period: int = 14
     allow_puts: bool = True
+    allow_calls: bool = True
     start_date: date | None = None
+    # Market regime: with regime_symbol set, calls only while it closes at/above its SMA and
+    # puts only while it closes below (bearish bets need no stock: long puts only).
+    regime_symbol: str | None = None
+    regime_sma: int = 50
+    untradable: tuple[str, ...] = ()
 
 
 @dataclass
@@ -156,6 +162,8 @@ class OptionSimulator:
         self.rules = rules
         self.exits = exits
         self.cfg = config or OptionSimConfig()
+        if self.cfg.regime_symbol and self.cfg.regime_symbol not in data:
+            raise ValueError(f"regime_symbol {self.cfg.regime_symbol} is not in the data")
         self.cash = self.cfg.initial_cash
         self.positions: dict[str, OptionPosition] = {}
         self.pending_entries: dict[str, _Pending] = {}
@@ -281,17 +289,41 @@ class OptionSimulator:
             prev_equity = equity
         return self.result
 
+    def _regime(self) -> str | None:
+        """'bull' / 'bear' from the benchmark vs its SMA; None if no filter or no history."""
+        cfg = self.cfg
+        if not cfg.regime_symbol:
+            return None
+        h = self.history[cfg.regime_symbol]
+        if len(h) < cfg.regime_sma:
+            return None
+        sma = sum(b.close for b in h[-cfg.regime_sma :]) / cfg.regime_sma
+        return "bull" if h[-1].close >= sma else "bear"
+
     def _signal(self, s: str, d: date, equity: float) -> OptionOrder | None:
         cfg, h = self.cfg, self.history[s]
+        if s in cfg.untradable:
+            return None
         atr = self.atrs.get(s)
         if len(h) < max(cfg.breakout_lookback, cfg.trend_sma) + 1 or not atr:
             return None
         close = h[-1].close
         prior = h[-cfg.breakout_lookback - 1 : -1]
         sma = sum(b.close for b in h[-cfg.trend_sma :]) / cfg.trend_sma
-        if close > max(b.high for b in prior) and close > sma:
+        regime = self._regime()
+        if (
+            cfg.allow_calls
+            and regime != "bear"
+            and close > max(b.high for b in prior)
+            and close > sma
+        ):
             right, note = Right.CALL, "bull"
-        elif cfg.allow_puts and close < min(b.low for b in prior) and close < sma:
+        elif (
+            cfg.allow_puts
+            and regime != "bull"
+            and close < min(b.low for b in prior)
+            and close < sma
+        ):
             right, note = Right.PUT, "bear"
         else:
             return None
