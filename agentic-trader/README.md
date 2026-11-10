@@ -40,6 +40,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
+| `scripts/run_system_backtest.py` | Whole-system backtest (long sleeve + bear setups) |
 | `scripts/run_long_short_sim.py` | Long shares + regime-gated put sleeve backtest |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
@@ -153,6 +154,30 @@ The reasons: puts bought after a breakdown pay for already high volatility, and 
 rallies of 5%+ are common, which is all it takes to halve an at-the-money put. Puts are also
 usually priced above this model (skew). In this period the best bear-market defense was simply
 not buying: the 50-day regime filter on longs.
+
+## Full system backtest
+
+`scripts/run_system_backtest.py` puts it all together: 80% long shares (SPY 50d filter, ATR
+trailing stop, agent proxy woken on events) plus a 20% bear sleeve that buys put debit spreads
+only on clear setups (earnings-day gap down, failed rally in a downtrend), skipping entries near
+earnings, at IV > 80%, or more than 20% below the 50d SMA. `OptionSimConfig.signal_mode =
+"bear_setups"` implements the bear setups; multi-leg orders are checked against a package
+bid-ask cap (`max_package_spread_pct`).
+
+Result (`docs/sample_system_backtest.md`, 2021-09 to 2026-11):
+
+| Variant | Return | Max DD | Sharpe | Entries / month |
+|---|---:|---:|---:|---:|
+| shares + SPY 50d filter | +59% | 10.7% | 0.86 | 3.3 |
+| + agent proxy | +50% | 10.2% | 0.81 | 3.7 |
+| full system (+ bear sleeve) | +27% | 11.4% | 0.54 | 5.2 |
+| bear sleeve alone | -32% | 33.1% | -0.86 | 1.5 |
+| SPY buy & hold | +66% | 25.4% | 0.66 | – |
+
+The simplest version (shares + regime filter) is the best. With inferred, noisy earnings dates
+the agent proxy cost about 9 points. Failed-rally puts lost money (25% win rate), and the
+earnings-gap setup fired only 7 times. The bear sleeve made no trades in the Oct-Nov 2026 drop:
+the IV and "already extended" filters excluded exactly the shorts that would have paid.
 
 ## Going live on the Mac mini (planned steps)
 

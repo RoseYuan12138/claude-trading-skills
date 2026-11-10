@@ -188,3 +188,18 @@ def test_underlying_stop_for_calls_and_puts():
     put = pos(entry_s=100, right=Right.PUT)
     assert exit_signal(put, 3.0, 103.1, 2, TODAY, EXIT) == "underlying_stop"
     assert exit_signal(put, 3.0, 102.0, 2, TODAY, EXIT) is None
+
+
+def test_spread_check_uses_the_package_for_multi_leg_orders():
+    tight = order(
+        leg(Right.PUT, 60, Side.BUY, bid=3.00, ask=3.10),
+        leg(Right.PUT, 55, Side.SELL, bid=0.30, ask=0.36),  # 18% wide on its own
+        limit=2.75,
+    )
+    assert validate_option(tight, state(), RULES).allowed  # package: 0.16 / 2.72 = 5.9%
+    wide = order(
+        leg(Right.PUT, 60, Side.BUY, bid=2.80, ask=3.30),
+        leg(Right.PUT, 55, Side.SELL, bid=0.20, ask=0.50),
+        limit=2.8,
+    )
+    assert not validate_option(wide, state(), RULES).allowed

@@ -113,7 +113,8 @@ class OptionRules:
     daily_loss_limit_pct: float = 5.0
     min_dte: int = 7
     max_dte: int = 90
-    max_spread_pct: float = 10.0  # (ask - bid) / mid, per leg, when quotes are known
+    max_spread_pct: float = 10.0  # single-leg (ask - bid) / mid, when quotes are known
+    max_package_spread_pct: float = 25.0  # multi-leg: summed leg widths / |net mid|
     max_contracts: int = 20
     require_limit: bool = True
 
@@ -172,11 +173,11 @@ def validate_option(order: OptionOrder, state: OptionBookState, rules: OptionRul
             reasons.append(f"{dte} DTE outside [{rules.min_dte}, {rules.max_dte}]")
         if lg.qty > rules.max_contracts:
             reasons.append(f"{lg.qty} contracts > cap {rules.max_contracts}")
-        if lg.bid is not None and lg.ask is not None and lg.ask > 0:
-            mid = (lg.bid + lg.ask) / 2
-            spread = (lg.ask - lg.bid) / mid * 100 if mid > 0 else float("inf")
-            if spread > rules.max_spread_pct:
-                reasons.append(f"bid-ask spread {spread:.1f}% > {rules.max_spread_pct}%")
+
+    spread = _net_spread_pct(order.legs)
+    cap = rules.max_spread_pct if len(order.legs) == 1 else rules.max_package_spread_pct
+    if spread is not None and spread > cap:
+        reasons.append(f"bid-ask spread {spread:.1f}% > {cap}%")
 
     if state.equity > 0:
         loss_pct = s.max_loss / state.equity * 100
@@ -191,6 +192,21 @@ def validate_option(order: OptionOrder, state: OptionBookState, rules: OptionRul
         reasons.append(f"max loss ${s.max_loss:,.0f} not covered by cash ${state.cash:,.0f}")
 
     return Decision.deny(*reasons) if reasons else Decision.allow()
+
+
+def _net_spread_pct(legs: tuple[OptionLeg, ...]) -> float | None:
+    """Bid-ask width of the whole order as % of its net mid (None if quotes are missing).
+
+    Multi-leg orders trade as one package, so the package spread is what costs money; a
+    cheap far leg with a wide relative spread is fine if the combination is tight.
+    """
+    if any(lg.bid is None or lg.ask is None for lg in legs):
+        return None
+    net_mid = sum(((lg.bid + lg.ask) / 2) * (1 if lg.side is Side.BUY else -1) for lg in legs)
+    width = sum(lg.ask - lg.bid for lg in legs)
+    if abs(net_mid) <= 0:
+        return float("inf")
+    return width / abs(net_mid) * 100
 
 
 def _validate_close(order: OptionOrder, state: OptionBookState) -> Decision:

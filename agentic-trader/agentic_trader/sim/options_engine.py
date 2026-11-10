@@ -18,6 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from ..events import EventCalendar
 from ..models import Bar, OrderType, Side
 from ..options import (
     MULTIPLIER,
@@ -61,6 +62,20 @@ class OptionSimConfig:
     regime_symbol: str | None = None
     regime_sma: int = 50
     untradable: tuple[str, ...] = ()
+    # Signals: "breakout" (calls on 20d highs, puts on 20d lows) or "bear_setups":
+    # puts only on (a) an earnings-day gap down >= gap_down_pct on >= gap_volume_mult x
+    # volume closing in the lower half of its range (any regime), or (b) a failed rally in a
+    # downtrend: below a falling 50d SMA, high reaches the 20d SMA, red close below it
+    # (requires the regime to be bearish when regime_symbol is set).
+    signal_mode: str = "breakout"
+    gap_down_pct: float = 5.0
+    gap_volume_mult: float = 1.5
+    rally_band_pct: float = 1.5
+    bear_setups: tuple[str, ...] = ("earnings_gap", "failed_rally")
+    # Entry filters applied to every signal
+    earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
+    max_iv: float | None = None  # skip when the modelled IV is above this (e.g. 0.8)
+    max_extension_pct: float | None = None  # skip if already this far past the 50d SMA
 
 
 @dataclass
@@ -157,8 +172,10 @@ class OptionSimulator:
         exits: OptionExitRules,
         config: OptionSimConfig | None = None,
         name: str = "",
+        calendar: EventCalendar | None = None,
     ):
         self.data = data
+        self.calendar = calendar or EventCalendar()
         self.rules = rules
         self.exits = exits
         self.cfg = config or OptionSimConfig()
@@ -278,7 +295,7 @@ class OptionSimulator:
                 self.pending_entries[s] = _Pending(
                     s,
                     order.legs,
-                    Right.CALL if order.note == "bull" else Right.PUT,
+                    order.legs[0].right,
                     order.limit_price,
                     order.legs[0].qty,
                     order.limit_price * MULTIPLIER * order.legs[0].qty,
@@ -311,7 +328,12 @@ class OptionSimulator:
         prior = h[-cfg.breakout_lookback - 1 : -1]
         sma = sum(b.close for b in h[-cfg.trend_sma :]) / cfg.trend_sma
         regime = self._regime()
-        if (
+        if cfg.signal_mode == "bear_setups":
+            setup = self._bear_setup(s, h, d, sma, regime) if cfg.allow_puts else None
+            if setup is None:
+                return None
+            right, note = Right.PUT, setup
+        elif (
             cfg.allow_calls
             and regime != "bear"
             and close > max(b.high for b in prior)
@@ -326,6 +348,8 @@ class OptionSimulator:
         ):
             right, note = Right.PUT, "bear"
         else:
+            return None
+        if not self._entry_filters_ok(s, d, close, sma, right):
             return None
         step = strike_step(close)
         expiry = expiry_after(d, cfg.target_dte)
@@ -359,6 +383,57 @@ class OptionSimulator:
             for lg in legs_t
         )
         return OptionOrder(s, quoted, OptionAction.OPEN, OrderType.LIMIT, limit, d, note=note)
+
+    def _bear_setup(self, s: str, h: list[Bar], d: date, sma50: float, regime) -> str | None:
+        cfg = self.cfg
+        today, prev = h[-1], h[-2]
+        window = h[-21:-1]
+        avg_vol = sum(b.volume for b in window) / len(window)
+        gap = (today.open / prev.close - 1) * 100
+        rng = today.high - today.low
+        weak_close = today.close <= today.open and (
+            rng <= 0 or today.close <= today.low + 0.5 * rng
+        )
+        is_earnings = any(e.kind == "earnings" and e.symbol == s for e in self.calendar.on(d))
+        if (
+            is_earnings
+            and gap <= -cfg.gap_down_pct
+            and avg_vol > 0
+            and today.volume >= cfg.gap_volume_mult * avg_vol
+            and weak_close
+            and "earnings_gap" in cfg.bear_setups
+        ):
+            return "earnings_gap"
+        if "failed_rally" not in cfg.bear_setups:
+            return None
+        if regime == "bull" or len(h) < cfg.trend_sma + 11:
+            return None
+        sma20 = sum(b.close for b in h[-21:-1]) / 20
+        sma50_before = sum(b.close for b in h[-cfg.trend_sma - 10 : -10]) / cfg.trend_sma
+        if (
+            today.close < sma50
+            and sma50 < sma50_before
+            and today.high >= sma20 * (1 - cfg.rally_band_pct / 100)
+            and today.close < sma20
+            and today.close < today.open
+        ):
+            return "failed_rally"
+        return None
+
+    def _entry_filters_ok(self, s: str, d: date, close: float, sma50: float, right) -> bool:
+        cfg = self.cfg
+        if cfg.earnings_blackout_days > 0 and any(
+            e.kind == "earnings" and e.symbol == s
+            for e in self.calendar.upcoming(d, cfg.earnings_blackout_days, [s])
+        ):
+            return False
+        if cfg.max_iv is not None and self._iv(s) > cfg.max_iv:
+            return False
+        if cfg.max_extension_pct is not None and sma50 > 0:
+            ext = (close / sma50 - 1) * 100 if right is Right.CALL else (1 - close / sma50) * 100
+            if ext > cfg.max_extension_pct:
+                return False
+        return True
 
     def _leg_quote(self, s, lg, spot, d) -> tuple[float, float]:
         t = max((lg.expiry - d).days, 0) / 365

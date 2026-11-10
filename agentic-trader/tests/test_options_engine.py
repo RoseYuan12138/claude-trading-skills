@@ -182,3 +182,89 @@ def test_benchmark_is_not_traded():
     data = {"SPY": _flat_then([101 + i for i in range(10)])}
     sim = OptionSimulator(data, RULES, EXITS, OptionSimConfig(untradable=("SPY",)))
     assert sim.run().trades == [] and not sim.positions
+
+
+# ------------------------------------------------------------ bear setups
+
+from agentic_trader.events import Event, EventCalendar  # noqa: E402
+
+BEAR = dict(signal_mode="bear_setups", allow_calls=False, structure="debit_vertical")
+
+
+def _sim(bars, calendar=None, **cfg):
+    sim = OptionSimulator(
+        {"X": bars}, RULES, EXITS, OptionSimConfig(**{**BEAR, **cfg}), calendar=calendar
+    )
+    sim.run()
+    return sim
+
+
+def _entries(sim):
+    return [t.entry_date for t in sim.result.trades] + [
+        p.entry_date for p in sim.positions.values()
+    ]
+
+
+def _gap_down_after_earnings(gap=0.9, vol=5e6, weak_close=True):
+    bars = _flat_then([])
+    d = business_days(bars[-1].date, 3)[1:]
+    o = bars[-1].close * gap
+    c = o * (0.98 if weak_close else 1.03)
+    bars.append(Bar(d[0], o, max(o, c) + 0.2, min(o, c) - 0.2, c, vol))
+    bars.append(Bar(d[1], c, c + 0.3, c - 0.3, c, 1e6))
+    return bars, d[0]
+
+
+def test_post_earnings_gap_down_buys_put_spread_next_open():
+    bars, day = _gap_down_after_earnings()
+    sim = _sim(bars, EventCalendar([Event(day, "earnings", "X", 3)]))
+    assert _entries(sim) == [bars[-1].date]
+    pos = list(sim.positions.values())[0]
+    assert pos.right is Right.PUT and len(pos.legs) == 2
+
+
+def test_gap_down_without_earnings_or_with_strong_close_is_ignored():
+    bars, day = _gap_down_after_earnings()
+    assert _entries(_sim(bars)) == []  # no earnings event
+    bars, day = _gap_down_after_earnings(weak_close=False)
+    assert _entries(_sim(bars, EventCalendar([Event(day, "earnings", "X", 3)]))) == []
+
+
+def _downtrend_then_failed_rally():
+    """Returns (bars, signal_day): the failed-rally bar is followed by one quiet bar."""
+    prices = [100 - i * 0.6 for i in range(70)]  # falling: below 50d SMA, SMA falling
+    bars = _path(prices)
+    last = bars[-1]
+    sma20 = sum(b.close for b in bars[-20:]) / 20
+    d1, d2 = business_days(last.date, 3)[1:]
+    # rallies up to the 20d SMA intraday, closes red below it
+    bars.append(Bar(d1, last.close + 1.0, sma20 + 0.1, last.close - 0.2, last.close + 0.2, 1e6))
+    c = bars[-1].close
+    bars.append(Bar(d2, c, c + 0.3, c - 0.3, c, 1e6))
+    return bars, d1
+
+
+def test_failed_rally_in_downtrend_buys_put():
+    bars, _ = _downtrend_then_failed_rally()
+    assert _entries(_sim(bars)) == [bars[-1].date]
+
+
+def test_extension_and_iv_filters_block_puts():
+    bars, day = _gap_down_after_earnings(gap=0.7)
+    cal = EventCalendar([Event(day, "earnings", "X", 3)])
+    assert _entries(_sim(bars, cal, max_extension_pct=20)) == []  # already 30% below 50d SMA
+    assert _entries(_sim(bars, cal, max_iv=0.05)) == []
+
+
+def test_option_entries_skip_earnings_blackout():
+    bars, signal_day = _downtrend_then_failed_rally()
+    soon = business_days(signal_day, 3)[2]
+    cal = EventCalendar([Event(soon, "earnings", "X", 3)])
+    assert len(_entries(_sim(bars, cal))) == 1
+    assert _entries(_sim(bars, cal, earnings_blackout_days=7)) == []
+
+
+def test_bear_setups_can_be_enabled_individually():
+    bars, _ = _downtrend_then_failed_rally()
+    assert _entries(_sim(bars, bear_setups=("earnings_gap",))) == []
+    assert len(_entries(_sim(bars, bear_setups=("failed_rally",)))) == 1
