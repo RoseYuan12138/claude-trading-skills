@@ -1,0 +1,15 @@
+# Option risk profile for the LEAPS trend-call strategy (docs/AGGRESSIVE_OPTIONS_STRATEGY.md).
+# Keys map 1:1 to agentic_trader.options.OptionRules; unknown keys are rejected.
+# Naked short options are always rejected, whatever this file says.
+allowed_structures: [long_call]
+allowed_underlyings: [QQQ]
+max_loss_per_trade_pct: 50     # premium of one order, % of equity (the strategy uses 30-50%)
+max_total_risk_pct: 50         # all open option premium, % of equity
+max_open_positions: 1
+max_entries_per_day: 2         # a roll is one close + one entry
+daily_loss_limit_pct: 100      # trend strategy: no intraday breaker on entries
+min_dte: 150
+max_dte: 400
+max_spread_pct: 3.0            # QQQ LEAPS are liquid; wider means wait or work the order
+max_contracts: 20
+require_limit: true

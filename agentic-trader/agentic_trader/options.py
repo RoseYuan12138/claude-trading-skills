@@ -117,6 +117,28 @@ class OptionRules:
     max_package_spread_pct: float = 25.0  # multi-leg: summed leg widths / |net mid|
     max_contracts: int = 20
     require_limit: bool = True
+    allowed_underlyings: tuple[str, ...] = ()  # empty = any underlying
+
+
+def load_option_rules(path) -> OptionRules:
+    """OptionRules from YAML; unknown keys are rejected so typos cannot loosen limits."""
+    from dataclasses import fields
+    from pathlib import Path
+
+    import yaml
+
+    data = yaml.safe_load(Path(path).read_text()) or {}
+    known = {f.name for f in fields(OptionRules)}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        raise ValueError(f"unknown option rule keys: {', '.join(unknown)}")
+    for key in ("allowed_structures", "allowed_underlyings"):
+        if key in data:
+            vals = data[key] or ()
+            data[key] = tuple(
+                str(v).upper() if key == "allowed_underlyings" else str(v) for v in vals
+            )
+    return OptionRules(**data)
 
 
 @dataclass
@@ -148,6 +170,9 @@ def validate_option(order: OptionOrder, state: OptionBookState, rules: OptionRul
         reasons.append(f"max entries per day reached ({rules.max_entries_per_day})")
     if state.open_positions >= rules.max_open_positions:
         reasons.append(f"max open option positions reached ({rules.max_open_positions})")
+
+    if rules.allowed_underlyings and order.underlying.upper() not in rules.allowed_underlyings:
+        reasons.append(f"{order.underlying} is not an allowed underlying")
 
     s = classify(order)
     if s.name == "naked_short":

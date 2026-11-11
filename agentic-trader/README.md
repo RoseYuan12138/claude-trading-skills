@@ -309,8 +309,16 @@ Snapshot schema:
 {"as_of": "2026-11-10T15:00:00+00:00", "equity": 20000, "cash": 10000,
  "day_start_equity": 20000, "entries_today": 0, "halted": false,
  "positions": {"AAPL": {"qty": 10, "avg_price": 200, "last_price": 210, "stop_price": 195}},
- "quotes": {"MSFT": 400}}
+ "quotes": {"MSFT": 400},
+ "option_positions": [{"underlying": "QQQ", "right": "call", "strike": 575,
+                       "expiry": "2027-08-20", "qty": 2, "avg_price": 135.0}],
+ "option_entries_today": 0}
 ```
+
+Option orders go through `validate_option` with `config/live_option_rules.yaml`, the LEAPS
+strategy profile: long QQQ calls only, at most 50% of equity in premium, 150-400 DTE, limit
+orders, a bid-ask of 3% or less. Map the real option-order tool under `option_order_tools` in
+`config/mcp_tool_map.yaml`. Without the rules file, option orders are blocked.
 
 ## Roadmap
 
@@ -322,8 +330,8 @@ Snapshot schema:
       replace).
 - [ ] `claude -p` runner: trigger context in the prompt, existing skills (earnings-calendar,
       market-news-analyst, exposure-coach, position-sizer) for analysis.
-- [ ] Map the Robinhood MCP option-order tool into the hook (option orders are blocked as
-      unknown tools until then) and validate them with `validate_option`.
+- [x] Option orders in the hook (`option_order_tools` + `validate_option`); the field names are
+      still placeholders until the real Robinhood MCP schema is checked.
 - [ ] Options backtest with real historical chains (IV, skew, earnings crush).
 - [ ] Re-run the simulation on real OHLCV + real earnings/macro calendars.
 - [ ] Intraday bars in the simulator; limit orders; partial fills.

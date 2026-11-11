@@ -2,7 +2,9 @@
 """Claude Code PreToolUse hook entry point (reads the hook payload JSON from stdin).
 
 Files (relative to AGENTIC_TRADER_HOME, default: this project's root):
-    config/live_rules.yaml        risk limits
+    config/live_rules.yaml        risk limits (stocks)
+    config/live_option_rules.yaml option risk profile (optional; option orders are blocked
+                                  without it)
     config/mcp_tool_map.yaml      Robinhood MCP tool / argument mapping
     state/account_snapshot.json   latest account snapshot
     state/hook_audit.jsonl        append-only decision log
@@ -20,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from agentic_trader.hook import ToolMap, audit, evaluate_tool_call, load_snapshot  # noqa: E402
+from agentic_trader.options import load_option_rules  # noqa: E402
 from agentic_trader.risk_gate import load_rules  # noqa: E402
 
 
@@ -35,7 +38,9 @@ def main() -> int:
         tool_map = ToolMap.load(home / "config" / "mcp_tool_map.yaml")
         rules = load_rules(home / "config" / "live_rules.yaml")
         snapshot = load_snapshot(home / "state" / "account_snapshot.json")
-        decision = evaluate_tool_call(payload, tool_map, rules, snapshot, now)
+        opt_path = home / "config" / "live_option_rules.yaml"
+        option_rules = load_option_rules(opt_path) if opt_path.exists() else None
+        decision = evaluate_tool_call(payload, tool_map, rules, snapshot, now, option_rules)
     except Exception as e:  # any internal failure on a trading call: block
         if not str(payload.get("tool_name", "")).startswith("mcp__"):
             return 0

@@ -18,13 +18,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .models import AccountState, Decision, OrderIntent, OrderType, PositionSnapshot, Purpose, Side
+from .options import (
+    OptionAction,
+    OptionBookState,
+    OptionLeg,
+    OptionOrder,
+    OptionRules,
+    Right,
+    validate_option,
+)
 from .risk_gate import RiskRules, validate
 
 _ORDER_TYPES = {
@@ -44,6 +53,7 @@ class ToolMap:
     cancel_prefixes: tuple[str, ...] = ("cancel",)
     cancel_policy: str = "allow"  # "allow" or "deny"
     order_tools: dict[str, dict[str, str]] = field(default_factory=dict)
+    option_order_tools: dict[str, dict[str, str]] = field(default_factory=dict)
     snapshot_max_age_minutes: float = 15.0
 
     @classmethod
@@ -165,12 +175,88 @@ def parse_order(
     return OrderIntent(symbol, side, qty, Purpose.EXIT, ref, order_type, None, limit_price, "agent")
 
 
+def _option_legs(snapshot: dict[str, Any] | None) -> dict[tuple, int]:
+    legs: dict[tuple, int] = {}
+    for p in (snapshot or {}).get("option_positions") or []:
+        key = (
+            str(p["underlying"]).upper(),
+            str(p["right"]).lower(),
+            float(p["strike"]),
+            date.fromisoformat(str(p["expiry"])[:10]),
+        )
+        legs[key] = legs.get(key, 0) + int(p["qty"])
+    return legs
+
+
+def _option_book(snapshot: dict[str, Any]) -> OptionBookState:
+    equity = float(snapshot["equity"])
+    held = snapshot.get("option_positions") or []
+    open_risk = sum(
+        float(p.get("avg_price", 0)) * 100 * int(p["qty"]) for p in held if int(p["qty"]) > 0
+    )
+    return OptionBookState(
+        equity=equity,
+        cash=float(snapshot["cash"]),
+        day_start_equity=float(snapshot.get("day_start_equity", equity)),
+        open_risk=open_risk,
+        open_positions=len({(str(p["underlying"]).upper(), p["expiry"]) for p in held}),
+        entries_today=int(snapshot.get("option_entries_today", 0)),
+        halted=bool(snapshot.get("halted", False)),
+        legs=_option_legs(snapshot),
+    )
+
+
+def parse_option_order(
+    tool_input: dict[str, Any], mapping: dict[str, str], snapshot: dict[str, Any] | None
+) -> OptionOrder:
+    """Single-leg option order -> OptionOrder. Raises ValueError if anything is unclear."""
+
+    def get(key: str) -> Any:
+        name = mapping.get(key)
+        return tool_input.get(name) if name else None
+
+    underlying = str(get("underlying") or "").upper()
+    if not underlying:
+        raise ValueError("option order has no underlying")
+    right = Right(str(get("right") or "").lower())
+    strike = _num(get("strike"))
+    expiry_raw = get("expiry")
+    if not strike or not expiry_raw:
+        raise ValueError("option order needs strike and expiry")
+    expiry = date.fromisoformat(str(expiry_raw)[:10])
+    side = Side(str(get("side") or "").lower())
+    qty = _num(get("quantity"))
+    if not qty or qty <= 0 or qty != int(qty):
+        raise ValueError("option order needs a positive whole number of contracts")
+    type_name = str(get("order_type") or "market").lower()
+    if type_name not in {"market", "limit"}:
+        raise ValueError(f"unsupported option order type {type_name!r}")
+    order_type = OrderType.LIMIT if type_name == "limit" else OrderType.MARKET
+    limit = _num(get("limit_price"))
+    leg = OptionLeg(right, strike, expiry, side, int(qty))
+
+    effect = str(get("position_effect") or "").lower()
+    held = _option_legs(snapshot).get(leg.key(underlying), 0)
+    if effect in {"open", "close"}:
+        action = OptionAction(effect)
+    else:
+        action = OptionAction.CLOSE if (side is Side.SELL and held > 0) else OptionAction.OPEN
+    if limit is not None and side is Side.SELL and action is OptionAction.OPEN:
+        limit = -abs(limit)  # selling to open receives a credit
+    return OptionOrder(underlying, (leg,), action, order_type, limit, _today(), source="agent")
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
 def evaluate_tool_call(
     payload: dict[str, Any],
     tool_map: ToolMap,
     rules: RiskRules,
     snapshot: dict[str, Any] | None,
     now: datetime | None = None,
+    option_rules: OptionRules | None = None,
 ) -> Decision:
     now = now or datetime.now(timezone.utc)
     tool_name = str(payload.get("tool_name", ""))
@@ -179,6 +265,33 @@ def evaluate_tool_call(
         return Decision.allow()  # not a trading tool
     suffix = tool_name[len(prefix) :]
     lowered = suffix.lower()
+
+    if suffix in tool_map.option_order_tools:
+        if option_rules is None:
+            return Decision.deny("no option rules configured (config/live_option_rules.yaml)")
+        try:
+            order = parse_option_order(
+                payload.get("tool_input") or {}, tool_map.option_order_tools[suffix], snapshot
+            )
+        except (ValueError, TypeError) as e:
+            return Decision.deny(f"could not parse option order ({e}); blocked to be safe")
+        order = OptionOrder(
+            order.underlying,
+            order.legs,
+            order.action,
+            order.order_type,
+            order.limit_price,
+            now.date(),
+            order.source,
+        )
+        fresh = snapshot is not None and (
+            _snapshot_age_minutes(snapshot, now) <= tool_map.snapshot_max_age_minutes
+        )
+        if order.action is OptionAction.CLOSE and not fresh:
+            return Decision.allow()  # never block getting out
+        if not fresh:
+            return Decision.deny("account snapshot missing or stale: refresh it before entries")
+        return validate_option(order, _option_book(snapshot), option_rules)
 
     if suffix in tool_map.order_tools:
         tool_input = payload.get("tool_input") or {}

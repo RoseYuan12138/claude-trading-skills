@@ -32,3 +32,17 @@ order_tools:
 
 # Entries and stop changes are blocked if state/account_snapshot.json is older than this.
 snapshot_max_age_minutes: 15
+
+# Option orders (single leg). PLACEHOLDER field names, as above: check the real schema.
+# position_effect is optional ("open"/"close"); without it, selling a held leg is a close.
+option_order_tools:
+  place_option_order:
+    underlying: symbol
+    right: option_type
+    strike: strike
+    expiry: expiration
+    side: side
+    quantity: quantity
+    order_type: type
+    limit_price: price
+    position_effect: position_effect
