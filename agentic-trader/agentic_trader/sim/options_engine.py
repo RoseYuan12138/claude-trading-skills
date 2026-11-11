@@ -72,6 +72,9 @@ class OptionSimConfig:
     gap_volume_mult: float = 1.5
     rally_band_pct: float = 1.5
     bear_setups: tuple[str, ...] = ("earnings_gap", "failed_rally")
+    # "index_hedge": hold a put on hedge_symbols whenever the regime is bearish
+    hedge_symbols: tuple[str, ...] = ("QQQ",)
+    exit_on_regime_bull: bool = False  # close puts as soon as the regime turns bullish
     # Entry filters applied to every signal
     earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
     max_iv: float | None = None  # skip when the modelled IV is above this (e.g. 0.8)
@@ -276,6 +279,13 @@ class OptionSimulator:
                 pos = self.positions[s]
                 value = self._value(s, d)
                 pos.peak_price = max(pos.peak_price, value)
+                if (
+                    self.cfg.exit_on_regime_bull
+                    and pos.right is Right.PUT
+                    and self._regime() == "bull"
+                ):
+                    self.pending_exits[s] = "regime_exit"
+                    continue
                 reason = exit_signal(pos, value, today[s].close, self.atrs.get(s), d, self.exits)
                 if reason:
                     self.pending_exits[s] = reason
@@ -322,6 +332,10 @@ class OptionSimulator:
         if s in cfg.untradable:
             return None
         atr = self.atrs.get(s)
+        if cfg.signal_mode == "index_hedge":
+            if s not in cfg.hedge_symbols or not atr or self._regime() != "bear":
+                return None
+            return self._build_order(s, d, equity, Right.PUT, "hedge", h[-1].close, atr)
         if len(h) < max(cfg.breakout_lookback, cfg.trend_sma) + 1 or not atr:
             return None
         close = h[-1].close
@@ -351,6 +365,10 @@ class OptionSimulator:
             return None
         if not self._entry_filters_ok(s, d, close, sma, right):
             return None
+        return self._build_order(s, d, equity, right, note, close, atr)
+
+    def _build_order(self, s, d, equity, right, note, close, atr) -> OptionOrder | None:
+        cfg = self.cfg
         step = strike_step(close)
         expiry = expiry_after(d, cfg.target_dte)
         k = round_strike(close, step)

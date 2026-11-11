@@ -40,6 +40,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
+| `scripts/run_hedge_backtest.py` | Aggressive longs + regime-triggered QQQ put hedge |
 | `scripts/run_system_backtest.py` | Whole-system backtest (long sleeve + bear setups) |
 | `scripts/run_long_short_sim.py` | Long shares + regime-gated put sleeve backtest |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
@@ -178,6 +179,31 @@ The simplest version (shares + regime filter) is the best. With inferred, noisy 
 the agent proxy cost about 9 points. Failed-rally puts lost money (25% win rate), and the
 earnings-gap setup fired only 7 times. The bear sleeve made no trades in the Oct-Nov 2026 drop:
 the IV and "already extended" filters excluded exactly the shorts that would have paid.
+
+## Aggressive in bull regimes + index put hedge
+
+`OptionSimConfig(signal_mode="index_hedge", exit_on_regime_bull=True)` holds a QQQ put while
+SPY is below its 50d SMA and closes it when SPY closes back above. Run it with
+`scripts/run_hedge_backtest.py` (`docs/sample_hedge_backtest.md`).
+
+How fast does the 50d signal react? Since 2021-09 it caught all five SPY declines of 8% or more,
+4-15 days after the peak with SPY down 2-4% (2026-10-16 this time, -2.0%). But it flips about 9
+times a year, and two thirds of those flips are false alarms (no further 5% drop).
+
+| Variant | Return | Max DD | Sharpe | 2022 | Oct-Nov 2026 |
+|---|---:|---:|---:|---:|---:|
+| normal longs + 50d filter | +59% | 10.7% | 0.86 | -6.0% | -4.9% |
+| **aggressive longs** + filter (1.25% risk, 10 positions) | **+92%** | 15.9% | 0.88 | -9.8% | -6.6% |
+| aggressive + QQQ put hedge (1% premium per signal) | +81% | 15.5% | 0.83 | -9.3% | -6.5% |
+| QQQ buy & hold | +77% | 35.6% | 0.60 | -33.1% | -11.2% |
+| QQQ 90% + put hedge 1% | +65% | 33.0% | 0.58 | -30.8% | -10.9% |
+| QQQ 90% + 10% cash | +70% | 32.2% | 0.59 | -29.9% | -10.6% |
+
+Taking more risk in bull regimes paid off here, though on stocks chosen with hindsight. The put
+hedge did not: on the trading account the regime filter and stops are already the hedge (the
+book is mostly in cash when puts are bought), and on a buy-and-hold core, plain cash beat the
+puts. The hedge costs 4.6-7.6% of equity over five years because two thirds of its signals are
+false alarms and it buys after the drop has begun, when puts are expensive.
 
 ## Going live on the Mac mini (planned steps)
 

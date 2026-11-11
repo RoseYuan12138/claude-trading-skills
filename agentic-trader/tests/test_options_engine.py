@@ -268,3 +268,40 @@ def test_bear_setups_can_be_enabled_individually():
     bars, _ = _downtrend_then_failed_rally()
     assert _entries(_sim(bars, bear_setups=("earnings_gap",))) == []
     assert len(_entries(_sim(bars, bear_setups=("failed_rally",)))) == 1
+
+
+# ------------------------------------------------------------ index hedge
+
+
+def _hedge_sim(bench_path, **cfg):
+    q = _path(bench_path)
+    data = {"QQQ": q, "SPY": q}
+    base = dict(
+        signal_mode="index_hedge",
+        hedge_symbols=("QQQ",),
+        regime_symbol="SPY",
+        regime_sma=20,
+        untradable=("SPY",),
+        exit_on_regime_bull=True,
+        target_dte=45,
+    )
+    exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=5)
+    sim = OptionSimulator(data, RULES, exits, OptionSimConfig(**{**base, **cfg}))
+    return sim, sim.run()
+
+
+def test_index_hedge_buys_put_when_regime_turns_bear_and_exits_when_bull_returns():
+    up = [100 + i * 0.5 for i in range(40)]
+    down = [up[-1] - i * 1.0 for i in range(1, 8)]
+    back_up = [down[-1] + i * 2.0 for i in range(1, 12)]
+    sim, res = _hedge_sim(up + down + back_up)
+    assert res.trades, "expected one hedge round trip"
+    t = res.trades[0]
+    assert t.underlying == "QQQ" and t.right is Right.PUT
+    assert t.reason == "regime_exit"
+
+
+def test_index_hedge_ignores_breakouts_and_other_symbols():
+    up = [100 + i * 0.5 for i in range(60)]
+    sim, res = _hedge_sim(up)
+    assert res.trades == [] and not sim.positions  # never bearish
