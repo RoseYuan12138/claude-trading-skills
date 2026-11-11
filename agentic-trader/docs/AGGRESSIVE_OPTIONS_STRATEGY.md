@@ -112,6 +112,25 @@ drawdown: the median max drawdown fell from 46% to 39%.
   (30%) and +11.8% / 46% DD (50%), against SPY buy & hold at +8.7% / 55% DD. So the effect is not
   QQQ-only, but it is weaker on SPY.
 
+### What 10 years could look like (block bootstrap)
+
+The 2000-2026 daily returns were reshuffled in quarter-long blocks (the same blocks for every
+strategy) into 5,000 ten-year paths ([`risk_bootstrap_results.md`](risk_bootstrap_results.md)):
+
+| Strategy | Median CAGR | p5 to p95 CAGR | P(lose money) | P(DD > 50%) | P(DD > 70%) |
+|---|---:|---:|---:|---:|---:|
+| QQQ buy & hold | +8.8% | -4.6% to +21.8% | 13% | 48% | 8% |
+| 2x QQQ, two-index filter | +11.5% | -6.1% to +30.0% | 14% | 58% | 24% |
+| 3x QQQ, two-index filter | +13.2% | -13.4% to +42.6% | 21% | 90% | 52% |
+| **S3e LEAPS 30%** | +9.4% | -0.4% to +20.3% | **6%** | **10%** | **0%** |
+| **S3f LEAPS 50%** | **+14.0%** | -2.2% to +32.6% | **8%** | 50% | **10%** |
+
+This is the clearest case for the option version: a call can lose at most its premium, while a
+leveraged ETF keeps compounding a crash. S3f has a higher median than the 2x ETF and a much
+smaller chance of a catastrophic drawdown. S3e has about QQQ's median with a fifth of its odds
+of a 50% drawdown. The bootstrap reshuffles history; quarter-long blocks understate multi-year
+bear markets.
+
 ## Playbook for the independent agent account
 
 **Rule (checked once a day after the close):**
@@ -136,6 +155,11 @@ drawdown: the median max drawdown fell from 46% to 39%.
   premium at 2% per trade. This strategy needs its own rules profile with
   `max_loss_per_trade_pct` around 30-50, and the MCP option-order tool still has to be mapped in
   `config/mcp_tool_map.yaml`.
+- **Forward test first:** `python3 agentic-trader/scripts/paper_trade.py --fetch --init-cash 50000`
+  once, then `--fetch` every trading day after the close, adding `--quote <real price>` on trade
+  days. The journal (`reports/paper/leaps_journal.md`) logs real quote vs model, which is the
+  check the backtest cannot do. Trade real money only after a few roll cycles in which the
+  quotes track the model.
 - **Kill switch:** the strategy has historically lost 28-62% from a peak. Size the account so a
   60% drawdown on it is survivable; do not add leverage after losses.
 

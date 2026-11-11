@@ -190,6 +190,74 @@ COMBOS = {
 }
 
 
+def run_option_strategy(
+    name,
+    data,
+    scores,
+    vxn,
+    irx,
+    start,
+    end,
+    cash,
+    pricing=BASE_PRICING,
+    half_spread=HALF_SPREAD_PCT,
+    term=True,
+):
+    """Run one OPTION_STRATEGIES entry on QQQ; returns (equity curve, result)."""
+    overrides, exits, risk = OPTION_STRATEGIES[name]
+    put_skew, call_skew = PRICING[pricing]
+    d = {s: [b for b in data[s] if b.date <= end] for s in ("QQQ", "SPY")}
+    cfg = OptionSimConfig(
+        initial_cash=cash,
+        start_date=start,
+        untradable=("SPY",),
+        hedge_symbols=("QQQ",),
+        risk_per_trade_pct=risk,
+        div_yield=0.007,
+        half_spread_pct=half_spread,
+        min_half_spread=0.01,
+        put_skew_per_pct=put_skew,
+        call_skew_per_pct=call_skew,
+        iv_term_mean=TERM_MEAN if term else None,
+        iv_term_kappa=TERM_KAPPA,
+        **overrides,
+    )
+    rules = OptionRules(
+        max_loss_per_trade_pct=risk + 0.01,
+        max_total_risk_pct=risk + 0.01,
+        max_contracts=10**9,
+        max_dte=400,
+        daily_loss_limit_pct=100.0,
+    )
+    res = OptionSimulator(
+        d, rules, exits, cfg, scores=scores, iv_overrides=vxn, rates_pct=irx
+    ).run()
+    return res.equity_curve, res
+
+
+def load_inputs(data_dir, macro_dir, adj_dir):
+    """Data, market scores, QQQ implied vol (VXN, VIX x 1.86 before 2001) and ^IRX."""
+    data = load_csv_dir(data_dir)
+    macro = load_csv_dir(macro_dir)
+    adj = load_csv_dir(adj_dir)
+    stocks = sorted(s for s in data if s not in ETF_SYMBOLS)
+    scores = {
+        d: m.score
+        for d, m in market_scores(
+            {**{s: data[s] for s in stocks}, "SPY": data["SPY"]},
+            "SPY",
+            vix=macro.get("^VIX"),
+            credit=macro.get("HYG"),
+            breadth_symbols=stocks,
+        ).items()
+    }
+    vxn_raw = {b.date: b.close for b in macro["^VXN"]}
+    vix_raw = {b.date: b.close for b in macro.get("^VIX", [])}
+    vxn = {"QQQ": {**{d: v * 1.86 for d, v in vix_raw.items()}, **vxn_raw}}
+    irx = {b.date: b.close for b in adj["^IRX"]}
+    return data, macro, adj, scores, vxn, irx
+
+
 def stats(curve):
     eq = [e for _, e in curve]
     rets = [b / a - 1 for a, b in zip(eq, eq[1:]) if a > 0]
@@ -339,35 +407,9 @@ def main(argv=None) -> int:
     def option_curve(
         name, start, end, cash, pricing=BASE_PRICING, half_spread=HALF_SPREAD_PCT, term=True
     ):
-        overrides, exits, risk = OPTION_STRATEGIES[name]
-        put_skew, call_skew = PRICING[pricing]
-        d = {s: [b for b in data[s] if b.date <= end] for s in ("QQQ", "SPY")}
-        cfg = OptionSimConfig(
-            initial_cash=cash,
-            start_date=start,
-            untradable=("SPY",),
-            hedge_symbols=("QQQ",),
-            risk_per_trade_pct=risk,
-            div_yield=0.007,
-            half_spread_pct=half_spread,
-            min_half_spread=0.01,
-            put_skew_per_pct=put_skew,
-            call_skew_per_pct=call_skew,
-            iv_term_mean=TERM_MEAN if term else None,
-            iv_term_kappa=TERM_KAPPA,
-            **overrides,
+        return run_option_strategy(
+            name, data, scores, vxn, irx, start, end, cash, pricing, half_spread, term
         )
-        rules = OptionRules(
-            max_loss_per_trade_pct=risk + 0.01,
-            max_total_risk_pct=risk + 0.01,
-            max_contracts=10**9,
-            max_dte=400,
-            daily_loss_limit_pct=100.0,
-        )
-        res = OptionSimulator(
-            d, rules, exits, cfg, scores=scores, iv_overrides=vxn, rates_pct=irx
-        ).run()
-        return res.equity_curve, res
 
     lines = [
         "# Aggressive QQQ Option Strategies, 2001-2026",

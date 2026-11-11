@@ -60,6 +60,9 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/rotation.py` | Regime rotation and synthetic leveraged-ETF benchmarks |
 | `scripts/run_aggressive_research.py` | Final QQQ option research, 2001-2026, with skew/cost sensitivity and parameter sweep |
 | `scripts/run_combined_calls.py` | Breakout calls + dip calls, in and out of sample |
+| `agentic_trader/paper.py` + `scripts/paper_trade.py` | Daily forward paper trade of the LEAPS strategy, logging real quote vs model |
+| `agentic_trader/sim/bootstrap.py` + `scripts/run_risk_bootstrap.py` | Synchronised block bootstrap: 10-year outcome distribution per strategy |
+| `scripts/run_trend_variants.py` | Pre-registered refinements of the leveraged trend strategy (options vs ETF) |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |
