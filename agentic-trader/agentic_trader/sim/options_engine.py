@@ -52,7 +52,14 @@ class OptionSimConfig:
     half_spread_pct: float = 2.5
     entry_limit_buffer_pct: float = 3.0  # limit = ask + this % of mid, so small gaps still fill
     min_half_spread: float = 0.02
-    rate: float = 0.04
+    rate: float = 0.04  # used when no rate series is given
+    div_yield: float = 0.0  # continuous dividend yield of the underlying (QQQ ~0.007)
+    # Volatility skew by strike, in vol points per 1% away from spot: strikes below spot
+    # trade at higher IV (index skew is roughly 0.5-1.5 points per 1% for 1-month options,
+    # flatter for longer expiries), strikes above at lower IV. Applies to calls and puts.
+    put_skew_per_pct: float = 0.0
+    call_skew_per_pct: float = 0.0
+    skew_term_scaling: bool = True  # skew values are for 30-day options; scale by sqrt(30/days)
     breakout_lookback: int = 20
     trend_sma: int = 50
     hv_window: int = 20
@@ -83,6 +90,9 @@ class OptionSimConfig:
     score_tiers: tuple[ScoreTier, ...] = ()
     # "score_dip": buy a call on hedge_symbols whenever the day's score is below this
     dip_threshold: float = 30.0
+    dip_requires_bull: bool = (
+        False  # only buy dips while the regime is bullish (needs regime_symbol)
+    )
     # In "breakout" mode, also buy dip calls on hedge_symbols when the score is below
     # dip_threshold (ignoring the regime filter), sized with dip_risk_pct.
     dip_overlay: bool = False
@@ -204,6 +214,7 @@ class OptionSimulator:
         calendar: EventCalendar | None = None,
         scores: dict[date, float] | None = None,
         iv_overrides: dict[str, dict[date, float]] | None = None,
+        rates_pct: dict[date, float] | None = None,
     ):
         self.data = data
         self.calendar = calendar or EventCalendar()
@@ -211,9 +222,13 @@ class OptionSimulator:
         # symbol -> {date: implied vol in index points, e.g. VXN 25.0 = 25%}; used as-is
         # (no iv_premium) on the latest bar already known, so open fills use yesterday's.
         self.iv_overrides = iv_overrides or {}
+        # annual short rate in percent by date (e.g. ^IRX); the latest known value is used
+        self.rates_pct = rates_pct or {}
         self.rules = rules
         self.exits = exits
         self.cfg = config or OptionSimConfig()
+        self._rate_now = self.cfg.rate
+        self._pending_rate: float | None = None
         if self.cfg.regime_symbol and self.cfg.regime_symbol not in data:
             raise ValueError(f"regime_symbol {self.cfg.regime_symbol} is not in the data")
         self.cash = self.cfg.initial_cash
@@ -240,23 +255,43 @@ class OptionSimulator:
         hv = statistics.stdev(rets) * math.sqrt(252)
         return max(hv * self.cfg.iv_premium, self.cfg.iv_floor)
 
+    def _leg_price(self, sym: str, lg: OptionLeg, spot: float, as_of: date, iv: float) -> float:
+        """Black-Scholes with a strike-based skew: strikes below spot get IV +
+        put_skew_per_pct per 1% below, strikes above spot + call_skew_per_pct per 1% above,
+        for calls and puts alike (put-call parity: same strike, same IV)."""
+        cfg = self.cfg
+        t = max((lg.expiry - as_of).days, 0) / 365
+        below = max((spot - lg.strike) / spot * 100, 0.0)
+        above = max((lg.strike - spot) / spot * 100, 0.0)
+        # skew per 1% flattens with expiry: scale by sqrt(30 / days), as is common
+        days = max((lg.expiry - as_of).days, 1)
+        scale = math.sqrt(30 / max(days, 7)) if cfg.skew_term_scaling else 1.0
+        leg_iv = iv + scale * (cfg.put_skew_per_pct * below + cfg.call_skew_per_pct * above) / 100
+        return bs_price(
+            spot, lg.strike, t, self._rate_now, max(leg_iv, 0.01), lg.right, cfg.div_yield
+        )
+
     def _mid(self, sym: str, legs: tuple[OptionLeg, ...], spot: float, as_of: date) -> float:
         iv = self._iv(sym)
         total = 0.0
         for lg in legs:
-            t = max((lg.expiry - as_of).days, 0) / 365
-            px = bs_price(spot, lg.strike, t, self.cfg.rate, iv, lg.right)
+            px = self._leg_price(sym, lg, spot, as_of, iv)
             total += px if lg.side is Side.BUY else -px
+        if len(legs) == 2 and legs[0].right is legs[1].right:
+            width = abs(legs[0].strike - legs[1].strike)  # a vertical is worth at most its width
+            total = max(-width, min(width, total))
         return total
 
     def _half_spread(self, sym, legs, spot, as_of) -> float:
-        iv = self._iv(sym)
-        h = 0.0
-        for lg in legs:
-            t = max((lg.expiry - as_of).days, 0) / 365
-            px = bs_price(spot, lg.strike, t, self.cfg.rate, iv, lg.right)
-            h += max(self.cfg.min_half_spread, px * self.cfg.half_spread_pct / 100)
-        return h
+        """Half the bid-ask, per share. Single legs: % of the option price. Multi-leg orders
+        trade as one package: % of the net mid, at least min_half_spread per leg (charging
+        each deep-ITM leg separately would make a spread cost more than its width)."""
+        cfg = self.cfg
+        if len(legs) > 1:
+            net = abs(self._mid(sym, legs, spot, as_of))
+            return max(cfg.min_half_spread * len(legs), net * cfg.half_spread_pct / 100)
+        px = self._leg_price(sym, legs[0], spot, as_of, self._iv(sym))
+        return max(cfg.min_half_spread, px * cfg.half_spread_pct / 100)
 
     # -------------------------------------------------------------- state
 
@@ -299,6 +334,10 @@ class OptionSimulator:
         prev_equity = self.cfg.initial_cash
         for d in dates:
             today = {s: idx[d] for s, idx in by_date.items() if d in idx}
+            if self._pending_rate is not None:
+                self._rate_now = self._pending_rate  # yesterday's rate, known before the open
+            r = self.rates_pct.get(d)
+            self._pending_rate = r / 100 if r is not None else self._pending_rate
             for s, bar in today.items():
                 # Fill at the open using only information known before it (no lookahead):
                 # IV and ATR still reflect yesterday's close.
@@ -382,6 +421,8 @@ class OptionSimulator:
             if s not in cfg.hedge_symbols or not atr or score is None:
                 return None
             if score >= cfg.dip_threshold:
+                return None
+            if cfg.dip_requires_bull and self._regime() != "bull":
                 return None
             return self._build_order(s, d, equity, Right.CALL, "score_dip", h[-1].close, atr)
         if cfg.dip_overlay and cfg.signal_mode == "breakout" and s in cfg.hedge_symbols and atr:
@@ -568,8 +609,7 @@ class OptionSimulator:
         return True
 
     def _leg_quote(self, s, lg, spot, d) -> tuple[float, float]:
-        t = max((lg.expiry - d).days, 0) / 365
-        px = bs_price(spot, lg.strike, t, self.cfg.rate, self._iv(s), lg.right)
+        px = self._leg_price(s, lg, spot, d, self._iv(s))
         h = max(self.cfg.min_half_spread, px * self.cfg.half_spread_pct / 100)
         return max(px - h, 0.0), px + h
 
@@ -577,10 +617,16 @@ class OptionSimulator:
         if s in self.pending_exits and s in self.positions:
             reason = self.pending_exits.pop(s)
             pos = self.positions.pop(s)
-            mid = max(self._mid(s, pos.legs, bar.open, d), 0.0)
-            px = mid - self._half_spread(s, pos.legs, bar.open, d)
+            mid = self._mid(s, pos.legs, bar.open, d)  # signed: negative for credit positions
+            if pos.entry_price > 0:
+                mid = max(mid, 0.0)
+            else:
+                mid = min(mid, 0.0)
+            px = mid - self._half_spread(s, pos.legs, bar.open, d)  # we cross the spread
             if pos.entry_price > 0:
                 px = max(px, 0.0)
+            elif len(pos.legs) == 2:
+                px = max(px, -abs(pos.legs[0].strike - pos.legs[1].strike))
             self.cash += px * MULTIPLIER * pos.contracts
             self.result.trades.append(
                 OptionTrade(

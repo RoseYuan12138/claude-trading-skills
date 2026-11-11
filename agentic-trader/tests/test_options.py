@@ -236,3 +236,13 @@ def test_credit_time_stop():
 def test_credit_exit_rejects_debit_positions():
     with pytest.raises(ValueError):
         credit_exit_signal(pos(), 1.0, TODAY, CREDIT_EXIT)
+
+
+def test_black_scholes_put_call_parity_with_dividends():
+    S, K, T, r, sig, q = 100.0, 95.0, 0.5, 0.03, 0.25, 0.02
+    c = bs_price(S, K, T, r, sig, Right.CALL, q)
+    p_ = bs_price(S, K, T, r, sig, Right.PUT, q)
+    import math
+
+    assert c - p_ == pytest.approx(S * math.exp(-q * T) - K * math.exp(-r * T), abs=1e-9)
+    assert c < bs_price(S, K, T, r, sig, Right.CALL)  # dividends make calls cheaper

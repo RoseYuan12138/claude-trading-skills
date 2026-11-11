@@ -597,3 +597,111 @@ def test_equity_marks_credit_positions_as_liabilities():
     start = res.equity_curve[0][1]
     # right after entry equity is about unchanged (minus the bid-ask cost), not up by the credit
     assert abs(res.equity_curve[-1][1] - start) < start * 0.02
+
+
+def test_closing_a_credit_spread_pays_at_least_the_mid():
+    """Regression: buying back a losing credit spread must cost its value, not ~0."""
+    path = [100 + i * 0.3 for i in range(30)] + [88.0] * 10
+    spy = [100 + i * 0.3 for i in range(40)]
+    sim, res, q = _credit_sim(path, spy)
+    crash_day = q[30].date
+    t = next(t for t in res.trades if t.exit_date > crash_day)
+    assert t.exit_price < t.entry_price  # paid more to close than was received
+    assert t.exit_price < -2.5  # deep in the money: costs most of the ~5-point width
+    assert t.pnl < 0
+
+
+def test_vertical_value_is_capped_at_its_width():
+    path = [100 + i * 0.3 for i in range(30)] + [40.0] * 10  # far through both strikes
+    spy = [100 + i * 0.3 for i in range(40)]
+    sim, res, q = _credit_sim(path, spy)
+    t = next(t for t in res.trades if t.exit_date > q[30].date)
+    assert -t.pnl <= t.max_loss + 1e-6
+
+
+# ------------------------------------------------------------ pricing inputs
+
+
+from datetime import timedelta  # noqa: E402
+
+from agentic_trader.models import Side  # noqa: E402
+from agentic_trader.options import OptionLeg  # noqa: E402
+
+
+def _pricing_sim(**cfg):
+    bars = _path([100 + (0.3 if i % 2 else -0.3) for i in range(30)])
+    sim = OptionSimulator({"QQQ": bars}, RULES, EXITS, OptionSimConfig(**cfg))
+    sim.history["QQQ"] = bars
+    return sim, bars[-1]
+
+
+def test_put_skew_raises_otm_put_prices_only():
+    flat, last = _pricing_sim()
+    skewed, _ = _pricing_sim(put_skew_per_pct=1.0)
+    otm = OptionLeg(Right.PUT, 90.0, last.date + timedelta(days=35), Side.BUY, 1)
+    atm = OptionLeg(Right.PUT, 100.0, last.date + timedelta(days=35), Side.BUY, 1)
+    iv = 0.2
+    assert skewed._leg_price("QQQ", otm, 100.0, last.date, iv) > flat._leg_price(
+        "QQQ", otm, 100.0, last.date, iv
+    )
+    assert skewed._leg_price("QQQ", atm, 100.0, last.date, iv) == pytest.approx(
+        flat._leg_price("QQQ", atm, 100.0, last.date, iv)
+    )
+
+
+def test_rate_series_is_used_with_a_one_day_lag():
+    bars = _path([100 + (0.3 if i % 2 else -0.3) for i in range(30)])
+    rates = {b.date: (0.0 if i < 20 else 8.0) for i, b in enumerate(bars)}
+    sim = OptionSimulator({"QQQ": bars}, RULES, EXITS, OptionSimConfig(rate=0.04), rates_pct=rates)
+    sim.run()
+    assert sim._rate_now == pytest.approx(0.08)  # latest known value after the run
+    sim2 = OptionSimulator(
+        {"QQQ": bars[:21]}, RULES, EXITS, OptionSimConfig(rate=0.04), rates_pct=rates
+    )
+    sim2.run()
+    assert sim2._rate_now == pytest.approx(0.0)  # day 20's 8% is not used on day 20 itself
+
+
+def test_dip_requires_bull_regime():
+    n = 80
+    days = business_days(date(2025, 1, 1), n)
+    qqq = _path([100 + (0.3 if i % 2 else -0.3) for i in range(n)])
+    falling = [Bar(d, 400 - i, 401 - i, 399 - i, 400 - i, 5e7) for i, d in enumerate(days)]
+    rising = [Bar(d, 300 + i, 301 + i, 299 + i, 300 + i, 5e7) for i, d in enumerate(days)]
+    scores = {d: (20 if i == 60 else 60) for i, d in enumerate(days)}
+    base = dict(
+        signal_mode="score_dip",
+        hedge_symbols=("QQQ",),
+        dip_threshold=30.0,
+        dip_requires_bull=True,
+        regime_symbol="SPY",
+        regime_sma=50,
+        untradable=("SPY",),
+    )
+    for spy, expect in ((falling, False), (rising, True)):
+        sim = OptionSimulator(
+            {"QQQ": qqq, "SPY": spy}, RULES, EXITS, OptionSimConfig(**base), scores=scores
+        )
+        res = sim.run()
+        assert bool(res.trades or sim.positions) is expect
+
+
+def test_skew_is_by_strike_so_itm_calls_share_otm_put_iv():
+    """Put-call parity: a call and a put at the same strike carry the same implied vol."""
+    flat, last = _pricing_sim()
+    skewed, _ = _pricing_sim(put_skew_per_pct=1.0)
+    exp = last.date + timedelta(days=120)
+    itm_call = OptionLeg(Right.CALL, 85.0, exp, Side.BUY, 1)
+    iv = 0.2
+    assert (
+        skewed._leg_price("QQQ", itm_call, 100.0, last.date, iv)
+        > flat._leg_price("QQQ", itm_call, 100.0, last.date, iv) + 0.5
+    )
+    # parity holds under skew: C - P = S e^{-qT} - K e^{-rT}
+    put = OptionLeg(Right.PUT, 85.0, exp, Side.BUY, 1)
+    import math
+
+    t = 120 / 365
+    c = skewed._leg_price("QQQ", itm_call, 100.0, last.date, iv)
+    p = skewed._leg_price("QQQ", put, 100.0, last.date, iv)
+    assert c - p == pytest.approx(100.0 - 85.0 * math.exp(-0.04 * t), abs=1e-6)
