@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Download daily OHLCV from Yahoo Finance's public chart API into <SYMBOL>.csv files.
 
-Prices are split-adjusted (not dividend-adjusted). No API key needed. For research
+Prices are split-adjusted; pass --adjusted to also adjust for dividends (uses Yahoo's
+adjclose and scales open/high/low by the same factor). No API key needed. For research
 and simulation only: check Yahoo's terms before any other use.
 
 Example:
@@ -21,25 +22,36 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 URL = (
-    "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={p1}&period2={p2}&interval=1d"
+    "https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+    "?period1={p1}&period2={p2}&interval=1d&events=div,split"
 )
 
 
-def to_rows(payload: dict) -> list[tuple]:
+def to_rows(payload: dict, adjusted: bool = False) -> list[tuple]:
     result = payload["chart"]["result"][0]
     offset = timedelta(seconds=result["meta"].get("gmtoffset", 0))
     quote = result["indicators"]["quote"][0]
+    adj = (result["indicators"].get("adjclose") or [{}])[0].get("adjclose")
+    if adjusted and not adj:
+        raise ValueError("no adjclose in response")
     rows = []
     for i, ts in enumerate(result.get("timestamp") or []):
         o, h, low, c, v = (quote[k][i] for k in ("open", "high", "low", "close", "volume"))
         if None in (o, h, low, c):
             continue
+        if adjusted:
+            if adj[i] is None or c == 0:
+                continue
+            f = adj[i] / c
+            o, h, low, c = o * f, h * f, low * f, adj[i]
         d = (datetime.fromtimestamp(ts, timezone.utc) + offset).date()
         rows.append((d.isoformat(), round(o, 4), round(h, 4), round(low, 4), round(c, 4), v or 0))
     return rows
 
 
-def fetch(sym: str, start: date, end: date, retries: int = 4) -> list[tuple]:
+def fetch(
+    sym: str, start: date, end: date, retries: int = 4, adjusted: bool = False
+) -> list[tuple]:
     p1 = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
     p2 = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp()) + 86_400
     req = urllib.request.Request(
@@ -48,7 +60,7 @@ def fetch(sym: str, start: date, end: date, retries: int = 4) -> list[tuple]:
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return to_rows(json.load(resp))
+                return to_rows(json.load(resp), adjusted)
         except Exception as e:  # network / rate limit: back off and retry
             if attempt == retries - 1:
                 raise RuntimeError(f"{sym}: {e}") from e
@@ -62,12 +74,13 @@ def main(argv=None) -> int:
     p.add_argument("--start", type=date.fromisoformat, required=True)
     p.add_argument("--end", type=date.fromisoformat, default=date.today())
     p.add_argument("--out-dir", type=Path, default=Path("data/ohlcv"))
+    p.add_argument("--adjusted", action="store_true", help="dividend-adjust prices")
     args = p.parse_args(argv)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     failed = 0
     for sym in args.symbols:
         try:
-            rows = fetch(sym.upper(), args.start, args.end)
+            rows = fetch(sym.upper(), args.start, args.end, adjusted=args.adjusted)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             failed += 1

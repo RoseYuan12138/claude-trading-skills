@@ -40,6 +40,8 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
+| `agentic_trader/market_score.py` | 0-100 market score and score tiers |
+| `scripts/run_score_strategy.py` | Score predictive check + score-tiered call/put backtest |
 | `scripts/run_aggressive_options.py` | Sweep of option aggressiveness, stops and puts |
 | `scripts/run_hedge_backtest.py` | Aggressive longs + regime-triggered QQQ put hedge |
 | `scripts/run_system_backtest.py` | Whole-system backtest (long sleeve + bear setups) |
@@ -222,6 +224,25 @@ SPY is above its 50d SMA, puts on breakdowns while it is below.
   options cost realized vol, +159% at 1.15x (the default), and +71-75% at 1.3-1.4x, about SPY's
   +66% but with a ~50% drawdown. At 1.4x the 2% and 5% rows lose money. Single-stock IV usually
   trades above realized vol, and well above it before earnings, so real chains are needed.
+
+## Market score -> call/put tiers
+
+`agentic_trader/market_score.py` computes a 0-100 score as the equal-weight mean of trend (SPY vs
+50d/200d), breadth, 20d momentum, distance from the 1y high, VIX, and HYG vs its 50d (use
+`fetch_ohlcv.py --adjusted` for HYG). `OptionSimConfig.score_tiers` lets each day's score choose
+whether calls or puts are allowed and how large to trade. Run it with
+`scripts/run_score_strategy.py` (`docs/sample_score_strategy.md`). The weights and tiers were
+fixed before testing.
+
+- **The score measures risk, not direction.** Below 30, QQQ's median next-20-day return was
+  +2.9%, against +1.5% at 70 or above. But the chance of a 5%+ drop along the way was 58%,
+  against 27%.
+- **Tiers by score did worse than fixed settings:** +12% (calls 5%/2% by score, puts below 30)
+  vs +86% for fixed 5% calls gated by SPY > 50d. Dropping the puts gave +24%. Results swing
+  from +35% to -15% when the thresholds move 10 points, and lose money at 1.4x IV.
+- Use it as a risk thermometer (for example, to scale size or tighten stops). Do not use it as a
+  call/put switch. "Buy calls when the score is low" fits this data, but it was found in-sample,
+  so it is a hypothesis for the forward paper test, not a rule.
 
 ## Going live on the Mac mini (planned steps)
 

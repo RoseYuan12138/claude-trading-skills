@@ -305,3 +305,60 @@ def test_index_hedge_ignores_breakouts_and_other_symbols():
     up = [100 + i * 0.5 for i in range(60)]
     sim, res = _hedge_sim(up)
     assert res.trades == [] and not sim.positions  # never bearish
+
+
+# ------------------------------------------------------------ score tiers
+
+from agentic_trader.market_score import ScoreTier  # noqa: E402
+
+TIERS = (
+    ScoreTier(70, calls=True, puts=False, risk_pct=2.0, total_pct=10),
+    ScoreTier(50, calls=True, puts=False, risk_pct=1.0, total_pct=5),
+    ScoreTier(30, calls=False, puts=False, risk_pct=0, total_pct=0),
+    ScoreTier(0, calls=False, puts=True, risk_pct=1.0, total_pct=3),
+)
+
+
+def _score_sim(bars, score):
+    scores = {b.date: score for b in bars}
+    sim = OptionSimulator(
+        {"X": bars}, RULES, EXITS, OptionSimConfig(score_tiers=TIERS), scores=scores
+    )
+    res = sim.run()
+    return sim, res
+
+
+def _rights_and_cost(sim, res):
+    rights = [t.right for t in res.trades] + [p.right for p in sim.positions.values()]
+    costs = [p.max_loss for p in sim.positions.values()] + [
+        t.entry_price * 100 * t.contracts for t in res.trades
+    ]
+    return rights, costs
+
+
+def test_score_tiers_choose_direction_and_size():
+    up = _flat_then([101 + i for i in range(10)])
+    down = _flat_then([99 - i for i in range(10)])
+    r_hi, c_hi = _rights_and_cost(*_score_sim(up, 80))
+    r_mid, c_mid = _rights_and_cost(*_score_sim(up, 60))
+    assert r_hi[0] is Right.CALL and r_mid[0] is Right.CALL
+    assert c_hi[0] > c_mid[0] * 1.5  # 2% vs 1% of equity
+    assert _rights_and_cost(*_score_sim(up, 40))[0] == []  # cash tier
+    assert _rights_and_cost(*_score_sim(down, 60))[0] == []  # puts not allowed at 60
+    assert _rights_and_cost(*_score_sim(down, 20))[0][0] is Right.PUT
+
+
+def test_score_tier_total_cap_limits_positions():
+    bars = {s: _flat_then([101 + i for i in range(10)]) for s in ("A", "B", "C", "D")}
+    scores = {b.date: 60 for b in bars["A"]}
+    sim = OptionSimulator(bars, RULES, EXITS, OptionSimConfig(score_tiers=TIERS), scores=scores)
+    res = sim.run()
+    opened = len(res.trades) + len(sim.positions)
+    assert opened <= 5  # 1% each, 5% cap
+
+
+def test_no_score_for_the_day_means_no_entry():
+    up = _flat_then([101 + i for i in range(10)])
+    sim = OptionSimulator({"X": up}, RULES, EXITS, OptionSimConfig(score_tiers=TIERS), scores={})
+    res = sim.run()
+    assert not res.trades and not sim.positions

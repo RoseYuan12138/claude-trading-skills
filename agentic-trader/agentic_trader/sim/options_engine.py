@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from ..events import EventCalendar
+from ..market_score import ScoreTier, pick_tier
 from ..models import Bar, OrderType, Side
 from ..options import (
     MULTIPLIER,
@@ -75,6 +76,9 @@ class OptionSimConfig:
     # "index_hedge": hold a put on hedge_symbols whenever the regime is bearish
     hedge_symbols: tuple[str, ...] = ("QQQ",)
     exit_on_regime_bull: bool = False  # close puts as soon as the regime turns bullish
+    # Market-score tiers (see market_score.py): when set, each day's score picks whether
+    # calls / puts are allowed, the premium per trade and the cap on premium at risk.
+    score_tiers: tuple[ScoreTier, ...] = ()
     # Entry filters applied to every signal
     earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
     max_iv: float | None = None  # skip when the modelled IV is above this (e.g. 0.8)
@@ -176,9 +180,11 @@ class OptionSimulator:
         config: OptionSimConfig | None = None,
         name: str = "",
         calendar: EventCalendar | None = None,
+        scores: dict[date, float] | None = None,
     ):
         self.data = data
         self.calendar = calendar or EventCalendar()
+        self.scores = scores or {}
         self.rules = rules
         self.exits = exits
         self.cfg = config or OptionSimConfig()
@@ -342,33 +348,38 @@ class OptionSimulator:
         prior = h[-cfg.breakout_lookback - 1 : -1]
         sma = sum(b.close for b in h[-cfg.trend_sma :]) / cfg.trend_sma
         regime = self._regime()
+        calls_ok, puts_ok, risk = cfg.allow_calls, cfg.allow_puts, None
+        if cfg.score_tiers:
+            score = self.scores.get(d)
+            if score is None:
+                return None
+            tier = pick_tier(score, cfg.score_tiers)
+            open_risk = sum(p.max_loss for p in self.positions.values()) + sum(
+                p.max_loss for p in self.pending_entries.values()
+            )
+            if open_risk / equity * 100 + tier.risk_pct > tier.total_pct + 1e-9:
+                return None
+            calls_ok, puts_ok, risk = calls_ok and tier.calls, puts_ok and tier.puts, tier.risk_pct
         if cfg.signal_mode == "bear_setups":
-            setup = self._bear_setup(s, h, d, sma, regime) if cfg.allow_puts else None
+            setup = self._bear_setup(s, h, d, sma, regime) if puts_ok else None
             if setup is None:
                 return None
             right, note = Right.PUT, setup
-        elif (
-            cfg.allow_calls
-            and regime != "bear"
-            and close > max(b.high for b in prior)
-            and close > sma
-        ):
+        elif calls_ok and regime != "bear" and close > max(b.high for b in prior) and close > sma:
             right, note = Right.CALL, "bull"
-        elif (
-            cfg.allow_puts
-            and regime != "bull"
-            and close < min(b.low for b in prior)
-            and close < sma
-        ):
+        elif puts_ok and regime != "bull" and close < min(b.low for b in prior) and close < sma:
             right, note = Right.PUT, "bear"
         else:
             return None
         if not self._entry_filters_ok(s, d, close, sma, right):
             return None
-        return self._build_order(s, d, equity, right, note, close, atr)
+        return self._build_order(s, d, equity, right, note, close, atr, risk)
 
-    def _build_order(self, s, d, equity, right, note, close, atr) -> OptionOrder | None:
+    def _build_order(
+        self, s, d, equity, right, note, close, atr, risk_pct: float | None = None
+    ) -> OptionOrder | None:
         cfg = self.cfg
+        risk_pct = cfg.risk_per_trade_pct if risk_pct is None else risk_pct
         step = strike_step(close)
         expiry = expiry_after(d, cfg.target_dte)
         k = round_strike(close, step)
@@ -384,7 +395,7 @@ class OptionSimulator:
         if limit <= 0.05:
             return None
         contracts = min(
-            math.floor(equity * cfg.risk_per_trade_pct / 100 / (limit * MULTIPLIER)),
+            math.floor(equity * risk_pct / 100 / (limit * MULTIPLIER)),
             self.rules.max_contracts,
         )
         if contracts <= 0:
