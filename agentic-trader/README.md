@@ -63,6 +63,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/paper.py` + `scripts/paper_trade.py` | Daily forward paper trade of the LEAPS strategy, logging real quote vs model |
 | `agentic_trader/sim/bootstrap.py` + `scripts/run_risk_bootstrap.py` | Synchronised block bootstrap: 10-year outcome distribution per strategy |
 | `scripts/run_trend_variants.py` | Pre-registered refinements of the leveraged trend strategy (options vs ETF) |
+| `agent/leaps-daily.md` | Claude Code command for the daily after-close run: ticket, paper trade, news, daily note, Claude's view logged next to the rule (copy to `.claude/commands/` on the trading machine) |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |

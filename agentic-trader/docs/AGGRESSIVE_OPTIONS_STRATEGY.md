@@ -166,6 +166,11 @@ bear markets.
   days. The journal (`reports/paper/leaps_journal.md`) logs real quote vs model, which is the
   check the backtest cannot do. Trade real money only after a few roll cycles in which the
   quotes track the model.
+- **Daily routine on the Mac mini:** copy `agentic-trader/agent/leaps-daily.md` to
+  `.claude/commands/` and run `/leaps-daily` after the close (or schedule it). Claude runs the
+  ticket and paper trade, checks news, writes a note, and logs its own agree/disagree view
+  next to the rule without acting on it. That builds the record needed to judge whether
+  Claude's judgement adds anything.
 - **Kill switch:** the strategy has historically lost 28-62% from a peak. Size the account so a
   60% drawdown on it is survivable; do not add leverage after losses.
 
