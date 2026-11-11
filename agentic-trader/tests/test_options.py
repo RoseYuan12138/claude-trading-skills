@@ -203,3 +203,36 @@ def test_spread_check_uses_the_package_for_multi_leg_orders():
         limit=2.8,
     )
     assert not validate_option(wide, state(), RULES).allowed
+
+
+# ------------------------------------------------------------ credit exits
+
+from agentic_trader.options import credit_exit_signal  # noqa: E402
+
+CREDIT_EXIT = OptionExitRules(credit_take_profit_pct=50, credit_stop_multiple=2.0, time_stop_dte=7)
+
+
+def credit_pos(credit=1.0, exp=EXP):
+    return OptionPosition(
+        "QQQ", Right.PUT, exp, -credit, -credit, 100.0, contracts=1, max_loss=400.0
+    )
+
+
+def test_credit_take_profit_when_half_the_credit_is_captured():
+    assert credit_exit_signal(credit_pos(), -0.49, TODAY, CREDIT_EXIT) == "take_profit"
+    assert credit_exit_signal(credit_pos(), -0.60, TODAY, CREDIT_EXIT) is None
+
+
+def test_credit_stop_when_loss_reaches_multiple_of_credit():
+    assert credit_exit_signal(credit_pos(), -3.0, TODAY, CREDIT_EXIT) == "stop_loss"  # loss = 2x
+    assert credit_exit_signal(credit_pos(), -2.9, TODAY, CREDIT_EXIT) is None
+
+
+def test_credit_time_stop():
+    near = credit_pos(exp=TODAY + timedelta(days=5))
+    assert credit_exit_signal(near, -0.9, TODAY, CREDIT_EXIT) == "time_stop"
+
+
+def test_credit_exit_rejects_debit_positions():
+    with pytest.raises(ValueError):
+        credit_exit_signal(pos(), 1.0, TODAY, CREDIT_EXIT)

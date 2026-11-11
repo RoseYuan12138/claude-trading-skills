@@ -31,6 +31,8 @@ from ..options import (
     OptionPosition,
     OptionRules,
     Right,
+    classify,
+    credit_exit_signal,
     exit_signal,
     validate_option,
 )
@@ -84,6 +86,15 @@ class OptionSimConfig:
     # In "breakout" mode, also buy dip calls on hedge_symbols when the score is below
     # dip_threshold (ignoring the regime filter), sized with dip_risk_pct.
     dip_overlay: bool = False
+    # Strike placement: calls at close x m, puts at close x (2 - m). 1.0 = at the money,
+    # 0.85 = calls 15% in the money (a stock-replacement call with little time value).
+    strike_moneyness: float = 1.0
+    # "index_trend": hold a call on hedge_symbols whenever the regime is bullish
+    exit_on_regime_bear: bool = False  # close bullish positions when the regime turns bearish
+    # "put_credit": sell a put spread on hedge_symbols while the regime is bullish; short
+    # strike credit_otm_pct below the close, long strike credit_width_pct below that.
+    credit_otm_pct: float = 5.0
+    credit_width_pct: float = 5.0
     dip_risk_pct: float | None = None
     # Entry filters applied to every signal
     earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
@@ -102,6 +113,7 @@ class OptionTrade:
     contracts: int
     reason: str
     setup: str = ""
+    max_loss: float = 0.0  # dollars at risk when opened
 
     @property
     def pnl(self) -> float:
@@ -109,7 +121,9 @@ class OptionTrade:
 
     @property
     def r_multiple(self) -> float:
-        """P&L as a multiple of the premium at risk: -1.0 means the whole premium was lost."""
+        """P&L as a multiple of the money at risk: -1.0 means the whole risk was lost."""
+        if self.entry_price < 0 and self.max_loss > 0:  # credit spread
+            return self.pnl / self.max_loss
         return (self.exit_price - self.entry_price) / self.entry_price
 
 
@@ -247,8 +261,10 @@ class OptionSimulator:
     # -------------------------------------------------------------- state
 
     def _value(self, sym: str, as_of: date) -> float:
+        """Signed mid per share: >= 0 for debit positions, <= 0 for credit positions."""
         pos = self.positions[sym]
-        return max(self._mid(sym, pos.legs, self.history[sym][-1].close, as_of), 0.0)
+        mid = self._mid(sym, pos.legs, self.history[sym][-1].close, as_of)
+        return min(mid, 0.0) if pos.entry_price < 0 else max(mid, 0.0)
 
     def _equity(self, as_of: date) -> float:
         return self.cash + sum(
@@ -302,14 +318,19 @@ class OptionSimulator:
                 pos = self.positions[s]
                 value = self._value(s, d)
                 pos.peak_price = max(pos.peak_price, value)
-                if (
-                    self.cfg.exit_on_regime_bull
-                    and pos.right is Right.PUT
-                    and self._regime() == "bull"
+                regime = self._regime()
+                bullish = (pos.right is Right.CALL) == (pos.entry_price > 0)
+                if (self.cfg.exit_on_regime_bull and not bullish and regime == "bull") or (
+                    self.cfg.exit_on_regime_bear and bullish and regime == "bear"
                 ):
                     self.pending_exits[s] = "regime_exit"
                     continue
-                reason = exit_signal(pos, value, today[s].close, self.atrs.get(s), d, self.exits)
+                if pos.entry_price < 0:
+                    reason = credit_exit_signal(pos, value, d, self.exits)
+                else:
+                    reason = exit_signal(
+                        pos, value, today[s].close, self.atrs.get(s), d, self.exits
+                    )
                 if reason:
                     self.pending_exits[s] = reason
             for s in sorted(today):
@@ -331,7 +352,7 @@ class OptionSimulator:
                     order.legs[0].right,
                     order.limit_price,
                     order.legs[0].qty,
-                    order.limit_price * MULTIPLIER * order.legs[0].qty,
+                    classify(order).max_loss,
                     d,
                     order.note,
                 )
@@ -370,6 +391,14 @@ class OptionSimulator:
                 return self._build_order(
                     s, d, equity, Right.CALL, "score_dip", h[-1].close, atr, risk
                 )
+        if cfg.signal_mode == "put_credit":
+            if s not in cfg.hedge_symbols or not atr or self._regime() == "bear":
+                return None
+            return self._build_put_credit(s, d, equity, h[-1].close)
+        if cfg.signal_mode == "index_trend":
+            if s not in cfg.hedge_symbols or not atr or self._regime() == "bear":
+                return None
+            return self._build_order(s, d, equity, Right.CALL, "trend", h[-1].close, atr)
         if cfg.signal_mode == "index_hedge":
             if s not in cfg.hedge_symbols or not atr or self._regime() != "bear":
                 return None
@@ -414,7 +443,8 @@ class OptionSimulator:
         risk_pct = cfg.risk_per_trade_pct if risk_pct is None else risk_pct
         step = strike_step(close)
         expiry = expiry_after(d, cfg.target_dte)
-        k = round_strike(close, step)
+        m = cfg.strike_moneyness
+        k = round_strike(close * (m if right is Right.CALL else 2 - m), step)
         legs = [OptionLeg(right, k, expiry, Side.BUY, 1)]
         if cfg.structure == "debit_vertical":
             w = max(step, round_strike(cfg.spread_width_atr * atr, step))
@@ -444,6 +474,47 @@ class OptionSimulator:
             for lg in legs_t
         )
         return OptionOrder(s, quoted, OptionAction.OPEN, OrderType.LIMIT, limit, d, note=note)
+
+    def _build_put_credit(self, s: str, d: date, equity: float, close: float) -> OptionOrder | None:
+        cfg = self.cfg
+        step = strike_step(close)
+        expiry = expiry_after(d, cfg.target_dte)
+        k_short = round_strike(close * (1 - cfg.credit_otm_pct / 100), step)
+        k_long = round_strike(k_short - max(step, close * cfg.credit_width_pct / 100), step)
+        if k_long >= k_short:
+            return None
+        legs = (
+            OptionLeg(Right.PUT, k_short, expiry, Side.SELL, 1),
+            OptionLeg(Right.PUT, k_long, expiry, Side.BUY, 1),
+        )
+        mid = self._mid(s, legs, close, d)  # negative: net credit
+        half = self._half_spread(s, legs, close, d)
+        credit = -(mid + half)  # expected credit after crossing the spread
+        if credit <= 0.05:
+            return None
+        limit = round(-credit * (1 - cfg.entry_limit_buffer_pct / 100), 2)  # accept a bit less
+        width = k_short - k_long
+        loss_per_contract = (width + limit) * MULTIPLIER
+        contracts = min(
+            math.floor(equity * cfg.risk_per_trade_pct / 100 / loss_per_contract),
+            self.rules.max_contracts,
+        )
+        if contracts <= 0:
+            return None
+        quoted = tuple(
+            OptionLeg(
+                lg.right,
+                lg.strike,
+                lg.expiry,
+                lg.side,
+                contracts,
+                *self._leg_quote(s, lg, close, d),
+            )
+            for lg in legs
+        )
+        return OptionOrder(
+            s, quoted, OptionAction.OPEN, OrderType.LIMIT, limit, d, note="put_credit"
+        )
 
     def _bear_setup(self, s: str, h: list[Bar], d: date, sma50: float, regime) -> str | None:
         cfg = self.cfg
@@ -507,7 +578,9 @@ class OptionSimulator:
             reason = self.pending_exits.pop(s)
             pos = self.positions.pop(s)
             mid = max(self._mid(s, pos.legs, bar.open, d), 0.0)
-            px = max(mid - self._half_spread(s, pos.legs, bar.open, d), 0.0)
+            px = mid - self._half_spread(s, pos.legs, bar.open, d)
+            if pos.entry_price > 0:
+                px = max(px, 0.0)
             self.cash += px * MULTIPLIER * pos.contracts
             self.result.trades.append(
                 OptionTrade(
@@ -520,6 +593,7 @@ class OptionSimulator:
                     pos.contracts,
                     reason,
                     pos.setup,
+                    pos.max_loss,
                 )
             )
         p = self.pending_entries.pop(s, None)
@@ -527,23 +601,39 @@ class OptionSimulator:
             return
         mid = self._mid(s, p.legs, bar.open, d)
         px = mid + self._half_spread(s, p.legs, bar.open, d)
-        if px > p.limit or px <= 0:
+        if px > p.limit or (p.limit > 0 and px <= 0):
             self.result.unfilled_entries += 1
             return
-        cost = px * MULTIPLIER * p.contracts
-        if cost > self.cash:
+        cost = px * MULTIPLIER * p.contracts  # negative for a credit
+        if px < 0:
+            width = abs(p.legs[0].strike - p.legs[1].strike)
+            max_loss = (width + px) * MULTIPLIER * p.contracts
+        else:
+            max_loss = cost
+        if max_loss > self.cash or max_loss <= 0:
             self.result.unfilled_entries += 1
             return
         self.cash -= cost
         self.positions[s] = OptionPosition(
-            s, p.right, p.legs[0].expiry, px, px, bar.open, p.contracts, cost, p.legs, d, p.setup
+            s,
+            p.right,
+            p.legs[0].expiry,
+            px,
+            px,
+            bar.open,
+            p.contracts,
+            max_loss,
+            p.legs,
+            d,
+            p.setup,
         )
 
     def _settle_if_expired(self, s: str, d: date) -> None:
         pos = self.positions[s]
         if d < pos.expiry:
             return
-        px = max(self._mid(s, pos.legs, self.history[s][-1].close, pos.expiry), 0.0)
+        px = self._mid(s, pos.legs, self.history[s][-1].close, pos.expiry)
+        px = min(px, 0.0) if pos.entry_price < 0 else max(px, 0.0)
         self.positions.pop(s)
         self.pending_exits.pop(s, None)
         self.cash += px * MULTIPLIER * pos.contracts
@@ -558,6 +648,7 @@ class OptionSimulator:
                 pos.contracts,
                 "expiry",
                 pos.setup,
+                pos.max_loss,
             )
         )
 

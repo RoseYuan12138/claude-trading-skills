@@ -467,3 +467,133 @@ def test_trades_record_the_setup_that_opened_them():
     sim, res, _ = _dip_sim(path, lambda i: 20 if i == 60 else 60)
     setups = [t.setup for t in res.trades] + [p.setup for p in sim.positions.values()]
     assert setups == ["score_dip"]
+
+
+# ------------------------------------------------------------ ITM trend calls
+
+
+def _trend_sim(spy_path, qqq_path, **cfg):
+    q = _path(qqq_path)
+    spy = _path(spy_path)
+    base = dict(
+        signal_mode="index_trend",
+        hedge_symbols=("QQQ",),
+        regime_symbol="SPY",
+        regime_sma=20,
+        untradable=("SPY",),
+        strike_moneyness=0.85,
+        target_dte=120,
+        risk_per_trade_pct=20.0,
+        exit_on_regime_bear=True,
+    )
+    exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=30)
+    rules = OptionRules(max_loss_per_trade_pct=25, max_total_risk_pct=50, max_dte=200)
+    sim = OptionSimulator({"QQQ": q, "SPY": spy}, rules, exits, OptionSimConfig(**{**base, **cfg}))
+    return sim, sim.run(), q
+
+
+def test_index_trend_buys_itm_call_in_bull_regime():
+    up = [100 + i * 0.5 for i in range(40)]
+    sim, res, q = _trend_sim(up, up)
+    pos = list(sim.positions.values()) + res.trades
+    assert pos and pos[0].right is Right.CALL
+    legs = list(sim.positions.values())[0].legs
+    assert legs[0].strike < q[-1].close * 0.9  # ~15% in the money
+    assert (legs[0].expiry - q[-1].date).days > 60
+
+
+def test_index_trend_exits_when_regime_turns_bear():
+    path = [100 + i * 0.5 for i in range(40)] + [120 - i * 1.5 for i in range(1, 20)]
+    sim, res, _ = _trend_sim(path, path)
+    assert res.trades and res.trades[0].reason == "regime_exit"
+    assert not sim.positions  # no re-entry while bearish
+
+
+def test_strike_moneyness_defaults_to_at_the_money():
+    up = [100 + i * 0.5 for i in range(40)]
+    sim, _, q = _trend_sim(up, up, strike_moneyness=1.0)
+    pos = list(sim.positions.values())[0]
+    assert abs(pos.legs[0].strike - pos.entry_underlying) <= 2.5
+
+
+# ------------------------------------------------------------ put credit spreads
+
+CREDIT_EXITS = OptionExitRules(
+    stop_loss_pct=None,
+    trail_after_pct=None,
+    credit_take_profit_pct=50,
+    credit_stop_multiple=2.0,
+    time_stop_dte=7,
+)
+CREDIT_RULES = OptionRules(max_loss_per_trade_pct=10, max_total_risk_pct=20, max_dte=120)
+
+
+def _credit_sim(qqq_path, spy_path=None, exits=CREDIT_EXITS, **cfg):
+    q = _path(qqq_path)
+    spy = _path(spy_path or qqq_path)
+    base = dict(
+        signal_mode="put_credit",
+        hedge_symbols=("QQQ",),
+        regime_symbol="SPY",
+        regime_sma=20,
+        untradable=("SPY",),
+        risk_per_trade_pct=5.0,
+        target_dte=35,
+        credit_otm_pct=5.0,
+        credit_width_pct=5.0,
+        exit_on_regime_bear=True,
+        iv_floor=0.25,
+    )
+    sim = OptionSimulator(
+        {"QQQ": q, "SPY": spy}, CREDIT_RULES, exits, OptionSimConfig(**{**base, **cfg})
+    )
+    return sim, sim.run(), q
+
+
+def test_put_credit_spread_opens_for_a_credit_with_bounded_risk():
+    up = [100 + i * 0.3 for i in range(30)]
+    sim, res, q = _credit_sim(up)
+    pos = list(sim.positions.values())[0]
+    assert pos.entry_price < 0  # credit received
+    short, long_ = sorted(pos.legs, key=lambda lg: -lg.strike)
+    assert short.side.value == "sell" and long_.side.value == "buy"
+    assert short.strike < q[-1].close and long_.strike < short.strike
+    width = short.strike - long_.strike
+    assert pos.max_loss == pytest.approx((width + pos.entry_price) * 100 * pos.contracts)
+    assert pos.max_loss <= 50_000 * 0.05 + 1
+
+
+def test_put_credit_spread_takes_profit_as_the_market_rises():
+    up = [100 + i * 0.3 for i in range(30)] + [109 + i * 1.0 for i in range(25)]
+    sim, res, _ = _credit_sim(up)
+    t = res.trades[0]
+    assert t.reason == "take_profit" and t.pnl > 0 and t.setup == "put_credit"
+
+
+def test_put_credit_spread_loss_never_exceeds_max_loss_in_a_crash():
+    path = [100 + i * 0.3 for i in range(30)] + [60.0] * 10
+    spy = [100 + i * 0.3 for i in range(40)]  # keep the regime bullish to isolate the stop
+    sim, res, q = _credit_sim(path, spy)
+    crash_day = q[30].date
+    hit = [t for t in res.trades if t.exit_date >= crash_day]
+    assert hit, "the spread open into the crash should have been closed"
+    t = hit[0]
+    assert t.pnl < 0
+    assert -t.pnl <= t.max_loss + 1e-6
+    assert t.r_multiple >= -1.0 - 1e-9
+
+
+def test_put_credit_spread_closes_when_regime_turns_bear():
+    path = [100 + i * 0.3 for i in range(30)] + [109 - i * 0.2 for i in range(1, 15)]
+    spy = [100 + i * 0.3 for i in range(30)] + [109 - i * 1.5 for i in range(1, 15)]
+    sim, res, _ = _credit_sim(path, spy)
+    assert res.trades and res.trades[-1].reason == "regime_exit"
+    assert not sim.positions  # no new spread while bearish
+
+
+def test_equity_marks_credit_positions_as_liabilities():
+    up = [100 + i * 0.3 for i in range(30)]
+    sim, res, _ = _credit_sim(up)
+    start = res.equity_curve[0][1]
+    # right after entry equity is about unchanged (minus the bid-ask cost), not up by the credit
+    assert abs(res.equity_curve[-1][1] - start) < start * 0.02

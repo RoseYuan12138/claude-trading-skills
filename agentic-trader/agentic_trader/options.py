@@ -250,6 +250,10 @@ class OptionExitRules:
     trail_pct: float = 35.0  # ...trailing this far below the peak, never below breakeven
     time_stop_dte: int | None = 5  # close before the last days of time decay / assignment
     underlying_stop_atr: float | None = None  # thesis stop on the stock itself
+    # Credit positions (sold spreads): take profit once this % of the credit is captured;
+    # stop when the loss reaches this multiple of the credit received.
+    credit_take_profit_pct: float | None = 50.0
+    credit_stop_multiple: float | None = 2.0
 
 
 def exit_signal(
@@ -282,4 +286,29 @@ def exit_signal(
             return "underlying_stop"
         if pos.right is Right.PUT and underlying >= pos.entry_underlying + band:
             return "underlying_stop"
+    return None
+
+
+def credit_exit_signal(
+    pos: OptionPosition, value: float, as_of: date, rules: OptionExitRules
+) -> str | None:
+    """Exit reason for a credit position (``entry_price`` < 0, ``value`` <= 0), or None.
+
+    ``value`` is the signed mid of the position: buying it back costs ``-value``.
+    """
+    if pos.entry_price >= 0:
+        raise ValueError("credit_exit_signal handles credit positions only")
+    credit = -pos.entry_price
+    cost_to_close = -value
+    if rules.time_stop_dte is not None and (pos.expiry - as_of).days <= rules.time_stop_dte:
+        return "time_stop"
+    if rules.credit_take_profit_pct is not None and cost_to_close <= credit * (
+        1 - rules.credit_take_profit_pct / 100
+    ):
+        return "take_profit"
+    if (
+        rules.credit_stop_multiple is not None
+        and cost_to_close - credit >= rules.credit_stop_multiple * credit - 1e-12
+    ):
+        return "stop_loss"
     return None
