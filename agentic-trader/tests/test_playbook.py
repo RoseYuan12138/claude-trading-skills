@@ -78,3 +78,17 @@ def test_qqq_below_its_sma_means_cash_even_if_spy_is_bullish():
 def test_require_qqq_trend_needs_qqq_bars():
     with pytest.raises(ValueError):
         itm_trend_ticket(spy(True), 600.0, DAYS[-1], 1e5, 0.22, 0.04, params=ItmTrendParams())
+
+
+def test_monthly_expiry_is_the_third_friday_on_or_after_the_target():
+    from agentic_trader.playbook import monthly_expiry_on_or_after
+
+    assert monthly_expiry_on_or_after(date(2027, 8, 7)) == date(2027, 8, 20)
+    assert monthly_expiry_on_or_after(date(2027, 8, 20)) == date(2027, 8, 20)
+    assert monthly_expiry_on_or_after(date(2027, 8, 21)) == date(2027, 9, 17)
+    assert monthly_expiry_on_or_after(date(2027, 12, 25)) == date(2028, 1, 21)
+
+
+def test_ticket_uses_a_listed_monthly_expiry():
+    t = ticket(spy(True))
+    assert t.expiry.weekday() == 4 and 15 <= t.expiry.day <= 21

@@ -20,6 +20,21 @@ from .pricing import bs_delta, bs_price
 from .sim.options_engine import _term_iv, expiry_after, round_strike, strike_step
 
 
+def monthly_expiry_on_or_after(d: date) -> date:
+    """Third Friday (standard monthly option expiry) on or after ``d``."""
+    from datetime import timedelta
+
+    year, month = d.year, d.month
+    while True:
+        first = date(year, month, 1)
+        third_friday = first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+        if third_friday >= d:
+            return third_friday
+        month += 1
+        if month == 13:
+            year, month = year + 1, 1
+
+
 @dataclass(frozen=True)
 class ItmTrendParams:
     moneyness: float = 0.85  # strike = close x moneyness (0.85 = 15% in the money)
@@ -128,7 +143,7 @@ def itm_trend_ticket(
 
     step = strike_step(qqq_close)
     strike = round_strike(qqq_close * p.moneyness, step)
-    expiry = expiry_after(as_of, p.target_dte)
+    expiry = monthly_expiry_on_or_after(expiry_after(as_of, p.target_dte))
     price, delta = _estimate(qqq_close, strike, expiry, as_of, iv, rate, p)
     contracts = math.floor(equity * p.premium_pct / 100 / (price * MULTIPLIER))
     action = "ROLL" if position else "BUY"

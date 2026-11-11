@@ -152,7 +152,7 @@ bear markets.
 - **Today's ticket:** `python3 agentic-trader/scripts/strategy_today.py --fetch --equity <account $>`.
   On 2026-11-10 it said **CASH**: SPY 749.92 was above its 200-day SMA (730.99), but QQQ 674.76
   was below its own (681.42). When both are above, a $200,000 account at today's prices would buy
-  about 4 x QQQ 575C expiring around 2027-08, at an estimated ~$13,600 each (27% of the account),
+  about 4 x QQQ 575C expiring 2027-08-20 (the August monthly), at an estimated ~$13,600 each (27% of the account),
   for about 1.1x exposure.
 - **Minimum account:** one contract costs about $13,600, so with 30% premium you need about
   $45,000 or more to size it sensibly. Below that, the QLD version is more precise: put

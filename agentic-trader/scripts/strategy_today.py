@@ -89,7 +89,7 @@ def main(argv=None) -> int:
             )
         print(
             f"  {verb} {t.contracts} x QQQ {t.strike:g}C expiring {t.expiry} "
-            f"(choose the nearest listed monthly expiry on or after this date)"
+            f"(standard monthly expiry)"
         )
         print(
             f"  Estimated price ${t.est_price:,.2f}/share = ${t.est_price * 100:,.0f}/contract; "
