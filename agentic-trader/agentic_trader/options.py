@@ -239,6 +239,7 @@ class OptionPosition:
     max_loss: float
     legs: tuple[OptionLeg, ...] = ()
     entry_date: date | None = None
+    setup: str = ""  # which signal opened it, e.g. "bull", "score_dip", "hedge"
 
 
 @dataclass(frozen=True)

@@ -409,3 +409,61 @@ def test_iv_override_prices_options_with_the_given_vol():
     cheap = entry_price(cheap_sim, cheap_sim.result)
     pricey = entry_price(pricey_sim, pricey_res)
     assert pricey > cheap * 3
+
+
+# ------------------------------------------------------------ dip overlay
+
+
+def test_dip_overlay_adds_qqq_calls_in_a_bear_regime_alongside_breakouts():
+    n = 80
+    days = business_days(date(2025, 1, 1), n)
+    falling = [Bar(d, 400 - i, 401 - i, 399 - i, 400 - i, 5e7) for i, d in enumerate(days)]
+    qqq = _path([100 + (0.3 if i % 2 else -0.3) for i in range(n)])
+    stock = _path(
+        [100 + (0.3 if i % 2 else -0.3) for i in range(60)] + [101 + i for i in range(20)]
+    )
+    data = {"QQQ": qqq, "X": stock, "SPY": falling}
+    scores = {d: (20 if i == 65 else 60) for i, d in enumerate(days)}
+    cfg = OptionSimConfig(
+        regime_symbol="SPY",
+        regime_sma=50,
+        untradable=("SPY",),
+        allow_puts=False,
+        dip_overlay=True,
+        hedge_symbols=("QQQ",),
+        dip_threshold=30.0,
+        dip_risk_pct=1.0,
+    )
+    sim = OptionSimulator(data, RULES, EXITS, cfg, scores=scores)
+    res = sim.run()
+    held = {t.underlying: t for t in res.trades}
+    held.update({s: p for s, p in sim.positions.items()})
+    assert "QQQ" in held  # dip call despite the bear regime
+    assert "X" not in held  # breakout blocked by the bear regime
+    qqq_pos = held["QQQ"]
+    cost = (
+        qqq_pos.max_loss
+        if hasattr(qqq_pos, "max_loss")
+        else qqq_pos.entry_price * 100 * qqq_pos.contracts
+    )
+    assert cost <= 50_000 * 0.01 + 1  # sized with dip_risk_pct
+
+
+def test_dip_overlay_off_means_no_qqq_dip_trade():
+    n = 80
+    days = business_days(date(2025, 1, 1), n)
+    falling = [Bar(d, 400 - i, 401 - i, 399 - i, 400 - i, 5e7) for i, d in enumerate(days)]
+    qqq = _path([100 + (0.3 if i % 2 else -0.3) for i in range(n)])
+    cfg = OptionSimConfig(regime_symbol="SPY", regime_sma=50, untradable=("SPY",), allow_puts=False)
+    sim = OptionSimulator(
+        {"QQQ": qqq, "SPY": falling}, RULES, EXITS, cfg, scores={d: 20 for d in days}
+    )
+    res = sim.run()
+    assert not res.trades and not sim.positions
+
+
+def test_trades_record_the_setup_that_opened_them():
+    path = [100 + (0.3 if i % 2 else -0.3) for i in range(80)]
+    sim, res, _ = _dip_sim(path, lambda i: 20 if i == 60 else 60)
+    setups = [t.setup for t in res.trades] + [p.setup for p in sim.positions.values()]
+    assert setups == ["score_dip"]

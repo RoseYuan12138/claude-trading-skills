@@ -81,6 +81,10 @@ class OptionSimConfig:
     score_tiers: tuple[ScoreTier, ...] = ()
     # "score_dip": buy a call on hedge_symbols whenever the day's score is below this
     dip_threshold: float = 30.0
+    # In "breakout" mode, also buy dip calls on hedge_symbols when the score is below
+    # dip_threshold (ignoring the regime filter), sized with dip_risk_pct.
+    dip_overlay: bool = False
+    dip_risk_pct: float | None = None
     # Entry filters applied to every signal
     earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
     max_iv: float | None = None  # skip when the modelled IV is above this (e.g. 0.8)
@@ -97,6 +101,7 @@ class OptionTrade:
     exit_price: float
     contracts: int
     reason: str
+    setup: str = ""
 
     @property
     def pnl(self) -> float:
@@ -171,6 +176,7 @@ class _Pending:
     contracts: int
     max_loss: float
     created: date
+    setup: str = ""
 
 
 class OptionSimulator:
@@ -327,6 +333,7 @@ class OptionSimulator:
                     order.legs[0].qty,
                     order.limit_price * MULTIPLIER * order.legs[0].qty,
                     d,
+                    order.note,
                 )
                 entries_today += 1
             self.result.equity_curve.append((d, equity))
@@ -356,6 +363,13 @@ class OptionSimulator:
             if score >= cfg.dip_threshold:
                 return None
             return self._build_order(s, d, equity, Right.CALL, "score_dip", h[-1].close, atr)
+        if cfg.dip_overlay and cfg.signal_mode == "breakout" and s in cfg.hedge_symbols and atr:
+            score = self.scores.get(d)
+            if score is not None and score < cfg.dip_threshold:
+                risk = cfg.dip_risk_pct if cfg.dip_risk_pct is not None else cfg.risk_per_trade_pct
+                return self._build_order(
+                    s, d, equity, Right.CALL, "score_dip", h[-1].close, atr, risk
+                )
         if cfg.signal_mode == "index_hedge":
             if s not in cfg.hedge_symbols or not atr or self._regime() != "bear":
                 return None
@@ -497,7 +511,15 @@ class OptionSimulator:
             self.cash += px * MULTIPLIER * pos.contracts
             self.result.trades.append(
                 OptionTrade(
-                    s, pos.right, pos.entry_date, d, pos.entry_price, px, pos.contracts, reason
+                    s,
+                    pos.right,
+                    pos.entry_date,
+                    d,
+                    pos.entry_price,
+                    px,
+                    pos.contracts,
+                    reason,
+                    pos.setup,
                 )
             )
         p = self.pending_entries.pop(s, None)
@@ -514,7 +536,7 @@ class OptionSimulator:
             return
         self.cash -= cost
         self.positions[s] = OptionPosition(
-            s, p.right, p.legs[0].expiry, px, px, bar.open, p.contracts, cost, p.legs, d
+            s, p.right, p.legs[0].expiry, px, px, bar.open, p.contracts, cost, p.legs, d, p.setup
         )
 
     def _settle_if_expired(self, s: str, d: date) -> None:
@@ -527,7 +549,15 @@ class OptionSimulator:
         self.cash += px * MULTIPLIER * pos.contracts
         self.result.trades.append(
             OptionTrade(
-                s, pos.right, pos.entry_date, d, pos.entry_price, px, pos.contracts, "expiry"
+                s,
+                pos.right,
+                pos.entry_date,
+                d,
+                pos.entry_price,
+                px,
+                pos.contracts,
+                "expiry",
+                pos.setup,
             )
         )
 
