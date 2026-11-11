@@ -69,3 +69,27 @@ def test_state_round_trips_through_json(tmp_path):
     loaded = PaperState.load(path)
     assert loaded.position == s.position and loaded.cash == pytest.approx(s.cash)
     assert len(loaded.history) == len(s.history) == 1
+
+
+def test_goal_closes_the_position_and_stops_the_account(tmp_path):
+    from agentic_trader.paper import check_stop
+
+    s, _ = step(PaperState(cash=10_000.0), premium_pct=95.0, moneyness_ladder=(0.85, 1.0))
+    assert s.position is not None
+    s.last_mark *= 30  # pretend the call went up 30x
+    s2, row = check_stop(s, goal=100_000, floor=3_000)
+    assert row is not None and row.action == "STOP_GOAL"
+    assert s2.position is None and s2.stop_reason == "goal"
+    assert s2.cash == pytest.approx(s.equity * (1 - 0.005), rel=0.01)  # sold at the model bid
+    s2.save(tmp_path / "s.json")
+    assert PaperState.load(tmp_path / "s.json").stop_reason == "goal"
+
+
+def test_floor_stops_and_inside_band_does_nothing():
+    from agentic_trader.paper import check_stop
+
+    s = PaperState(cash=2_000.0)
+    s2, row = check_stop(s, goal=100_000, floor=3_000)
+    assert row.action == "STOP_FLOOR" and s2.stop_reason == "floor"
+    s3, row3 = check_stop(PaperState(cash=10_000.0), goal=100_000, floor=3_000)
+    assert row3 is None and s3.stop_reason is None

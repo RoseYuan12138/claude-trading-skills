@@ -55,6 +55,7 @@ class PaperState:
     position: PaperPosition | None = None
     history: list[JournalRow] = field(default_factory=list)
     last_mark: float = 0.0  # model value per share of the open position at the last step
+    stop_reason: str | None = None  # "goal" / "floor" once the account has stopped trading
 
     @property
     def equity(self) -> float:
@@ -74,6 +75,7 @@ class PaperState:
             "last_mark": self.last_mark,
             "position": asdict(self.position) if self.position else None,
             "history": [asdict(r) for r in self.history],
+            "stop_reason": self.stop_reason,
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(json.dumps(data, indent=2, default=enc))
@@ -96,7 +98,7 @@ class PaperState:
             r["date"] = date.fromisoformat(r["date"])
             r["expiry"] = date.fromisoformat(r["expiry"]) if r.get("expiry") else None
             hist.append(JournalRow(**r))
-        return cls(raw["cash"], pos, hist, raw.get("last_mark", 0.0))
+        return cls(raw["cash"], pos, hist, raw.get("last_mark", 0.0), raw.get("stop_reason"))
 
 
 def paper_step(
@@ -161,3 +163,35 @@ def paper_step(
     )
     new_state.history.append(row)
     return new_state, row
+
+
+def check_stop(
+    state: PaperState, goal: float, floor: float
+) -> tuple[PaperState, JournalRow | None]:
+    """Stop trading for good once equity reaches ``goal`` or falls below ``floor``: close
+    any open call at the model bid (last mark less half the bid-ask) and hold cash."""
+    eq = state.equity
+    if state.stop_reason or floor <= eq < goal:
+        return state, None
+    reason = "goal" if eq >= goal else "floor"
+    cash, pos, fill = state.cash, state.position, 0.0
+    if pos is not None:
+        fill = state.last_mark * (1 - HALF_SPREAD_PCT / 100)
+        cash += fill * MULTIPLIER * pos.contracts
+    last = state.history[-1].date if state.history else date.today()
+    new = PaperState(cash, None, list(state.history), 0.0, reason)
+    row = JournalRow(
+        last,
+        f"STOP_{reason.upper()}",
+        0,
+        pos.strike if pos else 0.0,
+        pos.expiry if pos else None,
+        state.last_mark,
+        None,
+        fill,
+        cash,
+        f"equity ${eq:,.0f} {'>=' if reason == 'goal' else '<'} "
+        f"${goal if reason == 'goal' else floor:,.0f}: stop trading",
+    )
+    new.history.append(row)
+    return new, row

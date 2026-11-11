@@ -92,3 +92,21 @@ def test_monthly_expiry_is_the_third_friday_on_or_after_the_target():
 def test_ticket_uses_a_listed_monthly_expiry():
     t = ticket(spy(True))
     assert t.expiry.weekday() == 4 and 15 <= t.expiry.day <= 21
+
+
+def test_ladder_steps_toward_the_money_for_a_small_account():
+    # $10k cannot buy one 15%-ITM call on a $600 underlying (~$12k); the ladder must pick
+    # the deepest strike of which one contract (plus half the spread) fits the budget
+    t = ticket(
+        spy(True), equity=10_000.0, premium_pct=95.0, moneyness_ladder=(0.85, 0.9, 0.95, 1.0)
+    )
+    assert t.action == "BUY" and t.contracts == 1
+    assert t.strike > 600 * 0.85
+    assert t.est_price * 100 * 1.005 <= 9_500
+    deeper = ticket(spy(True), equity=10_000.0, premium_pct=95.0, moneyness=0.85)
+    assert deeper.contracts == 0  # without the ladder nothing fits
+
+
+def test_ladder_keeps_the_deepest_strike_when_it_fits():
+    t = ticket(spy(True), moneyness_ladder=(0.85, 1.0))
+    assert t.strike == 510 and t.contracts > 0

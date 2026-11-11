@@ -47,6 +47,11 @@ class ItmTrendParams:
     div_yield: float = 0.007
     iv_term_mean: float | None = 0.24  # long-dated IV mean-reverts toward this
     iv_term_kappa: float = 3.0
+    # Small accounts: try these moneyness levels in order (deepest ITM first) and buy the
+    # first strike of which one contract, plus fill_buffer_pct, fits the premium budget.
+    # Empty = use ``moneyness`` only.
+    moneyness_ladder: tuple[float, ...] = ()
+    fill_buffer_pct: float = 0.5  # half the bid-ask assumed when checking what fits
 
 
 @dataclass(frozen=True)
@@ -142,10 +147,18 @@ def itm_trend_ticket(
         )
 
     step = strike_step(qqq_close)
-    strike = round_strike(qqq_close * p.moneyness, step)
     expiry = monthly_expiry_on_or_after(expiry_after(as_of, p.target_dte))
-    price, delta = _estimate(qqq_close, strike, expiry, as_of, iv, rate, p)
-    contracts = math.floor(equity * p.premium_pct / 100 / (price * MULTIPLIER))
+    budget = equity * p.premium_pct / 100
+    for m in p.moneyness_ladder or (p.moneyness,):
+        strike = round_strike(qqq_close * m, step)
+        price, delta = _estimate(qqq_close, strike, expiry, as_of, iv, rate, p)
+        if p.moneyness_ladder:
+            ask = price * (1 + p.fill_buffer_pct / 100) * MULTIPLIER
+            contracts = math.floor(budget / ask)
+        else:
+            contracts = math.floor(budget / (price * MULTIPLIER))
+        if contracts:
+            break
     action = "ROLL" if position else "BUY"
     note = (
         ""

@@ -42,6 +42,7 @@ def main(argv=None) -> int:
     p.add_argument("--fetch", action="store_true", help="download fresh data from Yahoo first")
     p.add_argument("--equity", type=float, required=True, help="account value in dollars")
     p.add_argument("--premium-pct", type=float, default=30.0, help="premium as %% of account")
+    p.add_argument("--ladder", type=float, nargs="+", help="moneyness ladder, deepest first")
     p.add_argument("--position", type=parse_position, help="open call as STRIKE:EXPIRY:CONTRACTS")
     args = p.parse_args(argv)
 
@@ -67,7 +68,7 @@ def main(argv=None) -> int:
     qqq_close = next(b.close for b in reversed(qqq) if b.date <= as_of)
     vxn = next(b.close for b in reversed(data["^VXN"]) if b.date <= as_of)
     irx = next(b.close for b in reversed(data["^IRX"]) if b.date <= as_of)
-    params = ItmTrendParams(premium_pct=args.premium_pct)
+    params = ItmTrendParams(premium_pct=args.premium_pct, moneyness_ladder=tuple(args.ladder or ()))
     t = itm_trend_ticket(
         spy, qqq_close, as_of, args.equity, vxn / 100, irx / 100, args.position, params, qqq
     )
