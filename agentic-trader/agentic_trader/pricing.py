@@ -18,6 +18,8 @@ def bs_price(
 ) -> float:
     """Price per share. ``T`` in years; at or after expiry returns intrinsic value."""
     is_call = getattr(right, "value", right) == "call"
+    if K <= 0:  # degenerate strike: the call is the discounted forward, the put worthless
+        return S * math.exp(-q * max(T, 0.0)) if is_call else 0.0
     if T <= 0 or sigma <= 0:
         intrinsic = S - K if is_call else K - S
         return max(intrinsic, 0.0)

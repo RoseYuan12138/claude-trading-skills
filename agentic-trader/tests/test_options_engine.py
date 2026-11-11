@@ -840,3 +840,8 @@ def test_monthly_regime_check_only_updates_on_the_first_trading_day_of_a_month()
     rm = monthly.run()
     assert any(t.reason == "regime_exit" for t in rd.trades)
     assert not any(t.reason == "regime_exit" for t in rm.trades)  # the dip was inside a month
+
+
+def test_strike_grid_handles_very_low_prices():
+    assert strike_step(0.4) == 0.01 and strike_step(3.0) == 0.1
+    assert round_strike(0.123, strike_step(0.123)) == pytest.approx(0.12)

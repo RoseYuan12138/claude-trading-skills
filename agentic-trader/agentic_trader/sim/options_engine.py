@@ -196,6 +196,10 @@ def _term_iv(iv30: float, t: float, long_run: float, kappa: float) -> float:
 
 
 def strike_step(price: float) -> float:
+    if price < 1:
+        return 0.01  # only reachable in synthetic series that collapsed (no reverse splits)
+    if price < 5:
+        return 0.1
     if price < 25:
         return 0.5
     if price < 100:

@@ -246,3 +246,8 @@ def test_black_scholes_put_call_parity_with_dividends():
 
     assert c - p_ == pytest.approx(S * math.exp(-q * T) - K * math.exp(-r * T), abs=1e-9)
     assert c < bs_price(S, K, T, r, sig, Right.CALL)  # dividends make calls cheaper
+
+
+def test_black_scholes_with_zero_strike_is_forward_value():
+    assert bs_price(10, 0.0, 0.5, 0.03, 0.4, Right.CALL) == pytest.approx(10.0)
+    assert bs_price(10, 0.0, 0.5, 0.03, 0.4, Right.PUT) == 0.0
