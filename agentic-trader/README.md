@@ -40,6 +40,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `agentic_trader/sim/options_engine.py` | Simulator for an agent that opens its own option positions |
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
+| `scripts/run_aggressive_options.py` | Sweep of option aggressiveness, stops and puts |
 | `scripts/run_hedge_backtest.py` | Aggressive longs + regime-triggered QQQ put hedge |
 | `scripts/run_system_backtest.py` | Whole-system backtest (long sleeve + bear setups) |
 | `scripts/run_long_short_sim.py` | Long shares + regime-gated put sleeve backtest |
@@ -204,6 +205,23 @@ hedge did not: on the trading account the regime filter and stops are already th
 book is mostly in cash when puts are bought), and on a buy-and-hold core, plain cash beat the
 puts. The hedge costs 4.6-7.6% of equity over five years because two thirds of its signals are
 false alarms and it buys after the drop has begun, when puts are expensive.
+
+## Aggressive option buying sweep
+
+`scripts/run_aggressive_options.py` (`docs/sample_aggressive_options.md`) sweeps premium per trade
+(2/5/10%), total premium cap (10/25/50%), puts on/off and stops on/off: calls on breakouts while
+SPY is above its 50d SMA, puts on breakdowns while it is below.
+
+- **Calls only, with a stop:** every size made money, but drawdowns grow fast: 2% per trade
+  +31-60% with a 31-33% max drawdown; 10% per trade with one position at a time +159% with 51%.
+- **Adding puts lost money in almost every configuration** (the bear-regime puts bled in false
+  alarms), even though they made +13-57% in Oct-Nov 2026.
+- **Bigger total caps blow up:** at 10% per trade with a 50% cap, the account fell to 1-21% of
+  its start. Without stops, results were worse in most rows.
+- **Everything depends on option prices.** The best row (10% per trade, calls) is +397% if
+  options cost realized vol, +159% at 1.15x (the default), and +71-75% at 1.3-1.4x, about SPY's
+  +66% but with a ~50% drawdown. At 1.4x the 2% and 5% rows lose money. Single-stock IV usually
+  trades above realized vol, and well above it before earnings, so real chains are needed.
 
 ## Going live on the Mac mini (planned steps)
 
