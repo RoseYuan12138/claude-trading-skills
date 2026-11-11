@@ -78,3 +78,70 @@ def synthetic_leveraged(
             )
         out.append(Bar(b.date, level, level, level, level, b.volume))
     return out
+
+
+def dynamic_leverage_curve(
+    index: list[Bar],
+    regime: list[Bar] | None,
+    vol_pct: dict[date, float],
+    start: date,
+    end: date,
+    target_vol: float = 0.25,
+    max_leverage: float = 3.0,
+    sma: int = 200,
+    buffer_pct: float = 0.0,
+    rates_pct: dict[date, float] | None = None,
+    expense_pct_per_x: float = 0.5,
+    trade_cost_bps: float = 5.0,
+    initial: float = 1.0,
+) -> list[tuple[date, float]]:
+    """Daily leverage = clip(target_vol / implied vol, 0, max) while the regime is bullish.
+
+    Approximates a mix of QQQ / QLD / TQQQ and cash. Everything observed on day d-1 sets the
+    exposure for day d: borrowing (L - 1) x short rate, an expense of ``expense_pct_per_x`` per
+    unit of leverage a year, and ``trade_cost_bps`` on each change in leverage.
+    """
+    closes = [b.close for b in index]
+    dates = [b.date for b in index]
+    regime_ok: dict[date, bool] = {}
+    if regime is not None:
+        rc = [b.close for b in regime]
+        state = None
+        for i, b in enumerate(regime):
+            if i < sma - 1:
+                continue
+            m = sum(rc[i - sma + 1 : i + 1]) / sma
+            c, buf = rc[i], buffer_pct / 100
+            if state is None or buf == 0:
+                state = c >= m
+            elif state and c < m * (1 - buf):
+                state = False
+            elif not state and c >= m * (1 + buf):
+                state = True
+            regime_ok[b.date] = state
+    equity, lev, rate = initial, 0.0, 0.0
+    curve = []
+    for i, d in enumerate(dates):
+        if d < start or d > end:
+            if rates_pct and d in rates_pct:
+                rate = rates_pct[d] / 100
+            continue
+        prev = dates[i - 1] if i else None
+        if prev is not None and prev >= start:
+            r = closes[i] / closes[i - 1] - 1
+            equity *= max(
+                1 + lev * r - max(lev - 1, 0) * rate / 252 - lev * expense_pct_per_x / 100 / 252,
+                0.0,
+            )
+        curve.append((d, equity))
+        # decide tomorrow's leverage from today's information
+        if rates_pct and d in rates_pct:
+            rate = rates_pct[d] / 100
+        ok = True if regime is None else regime_ok.get(d, False)
+        v = vol_pct.get(d)
+        new = 0.0
+        if ok and v:
+            new = min(max(target_vol / (v / 100), 0.0), max_leverage)
+        equity *= 1 - abs(new - lev) * trade_cost_bps / 10_000
+        lev = new
+    return curve

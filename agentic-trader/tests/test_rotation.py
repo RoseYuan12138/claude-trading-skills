@@ -56,3 +56,36 @@ def test_synthetic_leveraged_daily_returns_and_costs():
     assert s[1].close / s[0].close - 1 == pytest.approx(0.02 - 0.0504 / 252)
     wiped = synthetic_leveraged(bars([100, 60] + [60] * 118), 3.0, expense_pct=0.0)
     assert wiped[1].close == 0.0  # a -40% day wipes out a 3x fund
+
+
+def test_dynamic_leverage_scales_with_vol_and_lags_one_day():
+    from agentic_trader.sim.rotation import dynamic_leverage_curve
+
+    a = bars([100 * 1.01**i for i in range(120)])
+    low_vol = {d: 12.5 for d in DAYS}  # target 25% / 12.5% = 2x
+    high_vol = {d: 50.0 for d in DAYS}  # 0.5x
+    c_lo = dynamic_leverage_curve(
+        a, None, low_vol, DAYS[10], DAYS[-1], trade_cost_bps=0, expense_pct_per_x=0
+    )
+    c_hi = dynamic_leverage_curve(
+        a, None, high_vol, DAYS[10], DAYS[-1], trade_cost_bps=0, expense_pct_per_x=0
+    )
+    m_lo = dict(c_lo)
+    assert m_lo[DAYS[10]] == pytest.approx(1.0)  # first day: no exposure yet
+    assert m_lo[DAYS[11]] == pytest.approx(1 + 2 * 0.01)  # 2x from day 2
+    assert c_hi[-1][1] < c_lo[-1][1]
+
+
+def test_dynamic_leverage_respects_cap_and_regime():
+    from agentic_trader.sim.rotation import dynamic_leverage_curve
+
+    a = bars([100 * 1.01**i for i in range(120)])
+    tiny = {d: 2.0 for d in DAYS}
+    c = dynamic_leverage_curve(
+        a, None, tiny, DAYS[10], DAYS[-1], max_leverage=3.0, trade_cost_bps=0, expense_pct_per_x=0
+    )
+    m = dict(c)
+    assert m[DAYS[12]] / m[DAYS[11]] == pytest.approx(1.03)
+    falling = bars([200 - i for i in range(120)])
+    c = dynamic_leverage_curve(a, falling, tiny, DAYS[60], DAYS[-1], sma=20)
+    assert c[-1][1] == pytest.approx(c[0][1])

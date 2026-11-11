@@ -91,6 +91,30 @@ OPTION_STRATEGIES = {
         TREND_EXITS,
         50.0,
     ),
+    "S3c LEAPS trend calls, 270d/roll 60, 30%": (
+        dict(
+            signal_mode="index_trend",
+            regime_symbol="SPY",
+            regime_sma=200,
+            exit_on_regime_bear=True,
+            strike_moneyness=0.85,
+            target_dte=270,
+        ),
+        OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=60),
+        30.0,
+    ),
+    "S3d LEAPS trend calls, 270d/roll 60, 50%": (
+        dict(
+            signal_mode="index_trend",
+            regime_symbol="SPY",
+            regime_sma=200,
+            exit_on_regime_bear=True,
+            strike_moneyness=0.85,
+            target_dte=270,
+        ),
+        OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=60),
+        50.0,
+    ),
     "S4a put credit spreads (10% max loss)": (
         dict(
             signal_mode="put_credit",
@@ -126,6 +150,9 @@ PRICING = {
     "base skew": (0.75, -0.25),
     "steep skew": (1.25, 0.0),
 }
+# IV term structure (30-day VXN mean-reverting to 24% at kappa 3/yr for other expiries);
+# set to None for the flat-term sensitivity row.
+TERM_MEAN, TERM_KAPPA = 0.24, 3.0
 BASE_PRICING = "base skew"
 HALF_SPREAD_PCT = 0.5  # QQQ options: a few cents wide; 0.5% of price per leg, $0.01 minimum
 COST_SCENARIOS = (0.5, 1.0, 2.5)
@@ -170,9 +197,9 @@ def sweep_s3(option_curve_params, cash):
     put_skew, call_skew = PRICING[BASE_PRICING]
     results = []
     for m, dte, sma, roll, prem in itertools.product(
-        (0.80, 0.85, 0.90), (90, 120, 180), (150, 200, 250), (20, 30, 45), (30.0, 50.0)
+        (0.80, 0.85, 0.90), (180, 270, 365), (150, 200, 250), (30, 60, 90), (30.0, 50.0)
     ):
-        if roll >= dte - 30:
+        if roll >= dte - 60:
             continue
         row = []
         for start, end in PERIODS.values():
@@ -188,6 +215,8 @@ def sweep_s3(option_curve_params, cash):
                 min_half_spread=0.01,
                 put_skew_per_pct=put_skew,
                 call_skew_per_pct=call_skew,
+                iv_term_mean=TERM_MEAN,
+                iv_term_kappa=TERM_KAPPA,
                 signal_mode="index_trend",
                 regime_symbol="SPY",
                 regime_sma=sma,
@@ -199,7 +228,7 @@ def sweep_s3(option_curve_params, cash):
                 max_loss_per_trade_pct=prem + 0.01,
                 max_total_risk_pct=prem + 0.01,
                 max_contracts=10**9,
-                max_dte=200,
+                max_dte=400,
                 daily_loss_limit_pct=100.0,
             )
             exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=roll)
@@ -213,10 +242,10 @@ def sweep_s3(option_curve_params, cash):
             row.append(stats(curve))
         results.append(((m, dte, sma, roll, prem), row))
     out = [
-        "## S3 parameter neighbourhood (base pricing)",
+        "## S3 (LEAPS) parameter neighbourhood (base pricing)",
         "",
-        "Moneyness 0.80/0.85/0.90 x DTE 90/120/180 x regime SMA 150/200/250 x roll at "
-        "20/30/45 DTE, for 30% and 50% of equity in premium.",
+        "Moneyness 0.80/0.85/0.90 x DTE 180/270/365 x regime SMA 150/200/250 x roll at "
+        "30/60/90 DTE, for 30% and 50% of equity in premium.",
         "",
         "| Premium | Window | Combos | CAGR min / median / max % | Median Max DD % | "
         "Median Sharpe | Combos < 0 |",
@@ -275,7 +304,9 @@ def main(argv=None) -> int:
     two_x = synthetic_leveraged(adj["QQQ"], 2.0, irx, expense_pct=1.43)  # calibrated to QLD
     three_x = synthetic_leveraged(adj["QQQ"], 3.0, irx, expense_pct=2.53)  # calibrated to TQQQ
 
-    def option_curve(name, start, end, cash, pricing=BASE_PRICING, half_spread=HALF_SPREAD_PCT):
+    def option_curve(
+        name, start, end, cash, pricing=BASE_PRICING, half_spread=HALF_SPREAD_PCT, term=True
+    ):
         overrides, exits, risk = OPTION_STRATEGIES[name]
         put_skew, call_skew = PRICING[pricing]
         d = {s: [b for b in data[s] if b.date <= end] for s in ("QQQ", "SPY")}
@@ -290,13 +321,15 @@ def main(argv=None) -> int:
             min_half_spread=0.01,
             put_skew_per_pct=put_skew,
             call_skew_per_pct=call_skew,
+            iv_term_mean=TERM_MEAN if term else None,
+            iv_term_kappa=TERM_KAPPA,
             **overrides,
         )
         rules = OptionRules(
             max_loss_per_trade_pct=risk + 0.01,
             max_total_risk_pct=risk + 0.01,
             max_contracts=10**9,
-            max_dte=200,
+            max_dte=400,
             daily_loss_limit_pct=100.0,
         )
         res = OptionSimulator(
@@ -310,7 +343,8 @@ def main(argv=None) -> int:
         "All option strategies trade QQQ only and are priced off the actual VXN, the actual "
         "3-month T-bill rate (^IRX) and a 0.7% dividend yield, with a strike-based skew "
         f"('{BASE_PRICING}': +0.75 vol point per 1% below spot, -0.25 per 1% above, for 30-day "
-        "options, scaled by sqrt(30/days)) and a "
+        "options, scaled by sqrt(30/days)), a term structure (30-day VXN mean-reverting to "
+        f"{TERM_MEAN:.0%} at kappa {TERM_KAPPA:g}/yr for longer expiries) and a "
         f"{HALF_SPREAD_PCT}% half bid-ask per leg. Later tables vary skew and costs. Strategy "
         "parameters were fixed before the first run; skew, rates, dividends and costs were "
         "corrected afterwards (see the strategy document). "
@@ -368,14 +402,16 @@ def main(argv=None) -> int:
     lines += [
         "## Sensitivity to option pricing, 2001-2026 (CAGR % / Max DD % / Sharpe)",
         "",
-        "| Strategy | " + " | ".join(PRICING) + " |",
-        "|---|" + "---|" * len(PRICING),
+        "| Strategy | " + " | ".join(PRICING) + " | base skew, flat term structure |",
+        "|---|" + "---|" * (len(PRICING) + 1),
     ]
     for name in OPTION_STRATEGIES:
         cells = []
         for pricing in PRICING:
             st = stats(option_curve(name, start, end, args.initial_cash, pricing)[0])
             cells.append(f"{st['cagr']:+.1f} / {st['dd']:.0f} / {st['sharpe']:.2f}")
+        st = stats(option_curve(name, start, end, args.initial_cash, term=False)[0])
+        cells.append(f"{st['cagr']:+.1f} / {st['dd']:.0f} / {st['sharpe']:.2f}")
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
     lines += [
         "",

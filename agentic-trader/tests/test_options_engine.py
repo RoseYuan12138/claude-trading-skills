@@ -705,3 +705,76 @@ def test_skew_is_by_strike_so_itm_calls_share_otm_put_iv():
     c = skewed._leg_price("QQQ", itm_call, 100.0, last.date, iv)
     p = skewed._leg_price("QQQ", put, 100.0, last.date, iv)
     assert c - p == pytest.approx(100.0 - 85.0 * math.exp(-0.04 * t), abs=1e-6)
+
+
+# ------------------------------------------------------------ regime buffer + vol target
+
+
+def test_regime_buffer_ignores_small_dips_below_the_sma():
+    up = [100 + i * 0.5 for i in range(40)]
+    wobble = [
+        up[-1] - 3 + (2 if i % 2 else -2) * 0.3 for i in range(12)
+    ]  # hovers ~1-2% below SMA20
+    path = up + wobble
+    plain, res_plain, _ = _trend_sim(path, path)
+    buffered, res_buf, _ = _trend_sim(path, path, regime_buffer_pct=5.0)
+    assert any(t.reason == "regime_exit" for t in res_plain.trades)
+    assert not any(t.reason == "regime_exit" for t in res_buf.trades)
+
+
+def test_regime_buffer_still_exits_on_a_real_break():
+    path = [100 + i * 0.5 for i in range(40)] + [120 - i * 2.0 for i in range(1, 15)]
+    sim, res, _ = _trend_sim(path, path, regime_buffer_pct=2.0)
+    assert any(t.reason == "regime_exit" for t in res.trades)
+
+
+def test_vol_target_sizes_down_when_implied_vol_is_high():
+    up = [100 + i * 0.5 for i in range(40)]
+    q = _path(up)
+    spy = _path(up)
+    sizes = []
+    for iv in (15.0, 45.0):
+        cfg = dict(
+            signal_mode="index_trend",
+            hedge_symbols=("QQQ",),
+            regime_symbol="SPY",
+            regime_sma=20,
+            untradable=("SPY",),
+            strike_moneyness=0.85,
+            target_dte=120,
+            risk_per_trade_pct=20.0,
+            vol_target=0.20,
+            vol_target_cap=1.5,
+        )
+        rules = OptionRules(max_loss_per_trade_pct=40, max_total_risk_pct=40, max_dte=200)
+        exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=30)
+        sim = OptionSimulator(
+            {"QQQ": q, "SPY": spy},
+            rules,
+            exits,
+            OptionSimConfig(**cfg),
+            iv_overrides={"QQQ": {b.date: iv for b in q}},
+        )
+        res = sim.run()
+        first = (list(sim.positions.values()) + res.trades)[0]
+        sizes.append(first.max_loss)
+    assert sizes[0] > sizes[1] * 2  # 15% IV -> bigger than 45% IV
+
+
+def test_iv_term_structure_pulls_long_dated_vol_toward_the_long_run_level():
+    calm, last = _pricing_sim(iv_term_mean=0.24, iv_term_kappa=3.0)
+    flat, _ = _pricing_sim()
+    leaps = OptionLeg(Right.CALL, 100.0, last.date + timedelta(days=270), Side.BUY, 1)
+    month = OptionLeg(Right.CALL, 100.0, last.date + timedelta(days=30), Side.BUY, 1)
+    # calm market (30-day IV 15% < 24%): long-dated options cost more than at a flat 15%
+    assert calm._leg_price("QQQ", leaps, 100.0, last.date, 0.15) > flat._leg_price(
+        "QQQ", leaps, 100.0, last.date, 0.15
+    )
+    # stressed market (45%): long-dated options cost less than at a flat 45%
+    assert calm._leg_price("QQQ", leaps, 100.0, last.date, 0.45) < flat._leg_price(
+        "QQQ", leaps, 100.0, last.date, 0.45
+    )
+    # 30-day options keep the quoted 30-day vol
+    assert calm._leg_price("QQQ", month, 100.0, last.date, 0.15) == pytest.approx(
+        flat._leg_price("QQQ", month, 100.0, last.date, 0.15)
+    )

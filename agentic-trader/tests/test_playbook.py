@@ -32,11 +32,11 @@ def test_bull_regime_without_position_buys_an_itm_call():
     t = ticket(spy(True))
     assert t.action == "BUY"
     assert t.strike == pytest.approx(510.0)  # 15% in the money, on the $5 grid
-    assert (t.expiry - DAYS[-1]).days >= 120 and t.expiry.weekday() == 4
+    assert (t.expiry - DAYS[-1]).days >= 270 and t.expiry.weekday() == 4
     assert t.contracts >= 1
     assert t.premium <= 100_000 * 0.30 + 1e-6
     assert 0.8 < t.delta < 1.0
-    assert 1.0 < t.exposure < 2.0  # ~1.5x QQQ exposure at 30% premium
+    assert 0.8 < t.exposure < 2.0  # ~1-1.5x QQQ exposure at 30% premium (whole contracts)
 
 
 def test_bear_regime_means_cash():
@@ -47,8 +47,8 @@ def test_bear_regime_means_cash():
 
 
 def test_hold_and_roll():
-    far = OpenCall(510.0, DAYS[-1] + timedelta(days=80), 2)
-    near = OpenCall(510.0, DAYS[-1] + timedelta(days=25), 2)
+    far = OpenCall(510.0, DAYS[-1] + timedelta(days=150), 2)
+    near = OpenCall(510.0, DAYS[-1] + timedelta(days=50), 2)
     assert ticket(spy(True), position=far).action == "HOLD"
     t = ticket(spy(True), position=near)
     assert t.action == "ROLL" and t.contracts >= 1

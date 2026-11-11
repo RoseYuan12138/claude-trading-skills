@@ -2,7 +2,7 @@
 """Print today's action for the ITM trend-call strategy (and the QLD alternative).
 
 Rule: while SPY closes above its 200-day SMA, hold a ~15% in-the-money QQQ call with
-~120 days to expiry, premium = --premium-pct of the account; roll at 30 days left; sell
+~270 days to expiry, premium = --premium-pct of the account; roll at 60 days left; sell
 and hold cash when SPY closes below the SMA. Prices are model estimates from VXN; check
 the real quote (and use a limit order near the mid) before trading.
 

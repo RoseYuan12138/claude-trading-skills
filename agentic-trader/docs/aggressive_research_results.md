@@ -1,6 +1,6 @@
 # Aggressive QQQ Option Strategies, 2001-2026
 
-All option strategies trade QQQ only and are priced off the actual VXN, the actual 3-month T-bill rate (^IRX) and a 0.7% dividend yield, with a strike-based skew ('base skew': +0.75 vol point per 1% below spot, -0.25 per 1% above, for 30-day options, scaled by sqrt(30/days)) and a 0.5% half bid-ask per leg. Later tables vary skew and costs. Strategy parameters were fixed before the first run; skew, rates, dividends and costs were corrected afterwards (see the strategy document). Exits: S1/S2 -50% premium stop, trailing after +50%, 5 DTE; S3 regime exit (SPY < 200d) and roll at 30 DTE; S4 take profit at 50% of credit, stop at 2x credit, close at 7 DTE or when SPY < 200d.
+All option strategies trade QQQ only and are priced off the actual VXN, the actual 3-month T-bill rate (^IRX) and a 0.7% dividend yield, with a strike-based skew ('base skew': +0.75 vol point per 1% below spot, -0.25 per 1% above, for 30-day options, scaled by sqrt(30/days)), a term structure (30-day VXN mean-reverting to 24% at kappa 3/yr for longer expiries) and a 0.5% half bid-ask per leg. Later tables vary skew and costs. Strategy parameters were fixed before the first run; skew, rates, dividends and costs were corrected afterwards (see the strategy document). Exits: S1/S2 -50% premium stop, trailing after +50%, 5 DTE; S3 regime exit (SPY < 200d) and roll at 30 DTE; S4 take profit at 50% of credit, stop at 2x credit, close at 7 DTE or when SPY < 200d.
 
 ## 2001-2010 stress (2001-02-01 to 2010-12-31)
 
@@ -11,13 +11,15 @@ All option strategies trade QQQ only and are priced off the actual VXN, the actu
 | 2x QQQ while SPY > 200d | +5.3 | 50 | 0.33 | -21 | – |
 | 3x QQQ while SPY > 200d | +4.8 | 68 | 0.32 | -31 | – |
 | S1 breakout calls (5%/trade) | -0.8 | 24 | -0.04 | -7 | 53 (42% won) |
-| S2 dip calls, score < 30 (5%/trade) | -0.9 | 40 | -0.06 | -19 | 59 (32% won) |
-| S3a ITM trend calls, 30% in premium | +6.0 | 44 | 0.41 | -13 | 49 (39% won) |
-| S3b ITM trend calls, 50% in premium | +7.7 | 65 | 0.40 | -22 | 49 (39% won) |
-| S4a put credit spreads (10% max loss) | +0.8 | 11 | 0.18 | -5 | 116 (67% won) |
-| S4b put credit spreads (25% max loss) | +1.5 | 25 | 0.18 | -13 | 116 (67% won) |
-| C1 S3a 80% + S2 20% | +4.9 | 38 | 0.38 | -13 | – |
-| C2 S4a 80% + S2 20% | +0.4 | 12 | 0.12 | -8 | – |
+| S2 dip calls, score < 30 (5%/trade) | -0.4 | 40 | 0.00 | -26 | 61 (30% won) |
+| S3a ITM trend calls, 30% in premium | +5.4 | 46 | 0.37 | -14 | 49 (41% won) |
+| S3b ITM trend calls, 50% in premium | +6.6 | 66 | 0.36 | -24 | 49 (41% won) |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +4.9 | 38 | 0.37 | -11 | 38 (39% won) |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +6.9 | 55 | 0.39 | -18 | 38 (39% won) |
+| S4a put credit spreads (10% max loss) | +0.3 | 11 | 0.08 | -5 | 118 (66% won) |
+| S4b put credit spreads (25% max loss) | +0.3 | 26 | 0.09 | -12 | 118 (66% won) |
+| C1 S3a 80% + S2 20% | +4.5 | 40 | 0.35 | -15 | – |
+| C2 S4a 80% + S2 20% | +0.2 | 12 | 0.06 | -9 | – |
 
 ## 2011-2021 out of sample (2011-01-03 to 2021-08-31)
 
@@ -27,14 +29,16 @@ All option strategies trade QQQ only and are priced off the actual VXN, the actu
 | 2x QQQ buy & hold (QLD-like) | +38.0 | 52 | 1.02 | -8 | – |
 | 2x QQQ while SPY > 200d | +30.0 | 35 | 1.03 | -15 | – |
 | 3x QQQ while SPY > 200d | +42.7 | 48 | 1.02 | -24 | – |
-| S1 breakout calls (5%/trade) | +1.3 | 20 | 0.17 | -8 | 73 (41% won) |
-| S2 dip calls, score < 30 (5%/trade) | +4.6 | 13 | 0.67 | -5 | 28 (57% won) |
-| S3a ITM trend calls, 30% in premium | +19.0 | 30 | 0.89 | -18 | 57 (54% won) |
-| S3b ITM trend calls, 50% in premium | +30.4 | 45 | 0.91 | -29 | 57 (54% won) |
-| S4a put credit spreads (10% max loss) | +3.3 | 10 | 0.56 | -6 | 190 (79% won) |
-| S4b put credit spreads (25% max loss) | +7.8 | 25 | 0.56 | -17 | 190 (79% won) |
-| C1 S3a 80% + S2 20% | +17.2 | 28 | 0.89 | -15 | – |
-| C2 S4a 80% + S2 20% | +3.5 | 9 | 0.69 | -6 | – |
+| S1 breakout calls (5%/trade) | +0.4 | 22 | 0.09 | -9 | 74 (39% won) |
+| S2 dip calls, score < 30 (5%/trade) | +4.8 | 13 | 0.68 | -5 | 28 (57% won) |
+| S3a ITM trend calls, 30% in premium | +17.4 | 31 | 0.82 | -20 | 57 (54% won) |
+| S3b ITM trend calls, 50% in premium | +27.3 | 46 | 0.84 | -31 | 57 (54% won) |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +18.4 | 25 | 0.98 | -12 | 39 (44% won) |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +29.2 | 38 | 0.99 | -20 | 39 (44% won) |
+| S4a put credit spreads (10% max loss) | +4.1 | 10 | 0.69 | -6 | 193 (80% won) |
+| S4b put credit spreads (25% max loss) | +9.9 | 25 | 0.69 | -15 | 193 (80% won) |
+| C1 S3a 80% + S2 20% | +15.7 | 28 | 0.83 | -16 | – |
+| C2 S4a 80% + S2 20% | +4.2 | 9 | 0.80 | -6 | – |
 
 ## 2021-2026 in sample (2021-09-01 to 2026-11-10)
 
@@ -44,14 +48,16 @@ All option strategies trade QQQ only and are priced off the actual VXN, the actu
 | 2x QQQ buy & hold (QLD-like) | +13.8 | 64 | 0.51 | -60 | – |
 | 2x QQQ while SPY > 200d | +11.4 | 44 | 0.49 | -42 | – |
 | 3x QQQ while SPY > 200d | +10.8 | 60 | 0.46 | -57 | – |
-| S1 breakout calls (5%/trade) | +3.1 | 13 | 0.33 | -4 | 31 (39% won) |
-| S2 dip calls, score < 30 (5%/trade) | +3.3 | 18 | 0.43 | -17 | 19 (32% won) |
-| S3a ITM trend calls, 30% in premium | +4.4 | 40 | 0.30 | -32 | 29 (38% won) |
-| S3b ITM trend calls, 50% in premium | +4.4 | 58 | 0.31 | -49 | 29 (38% won) |
-| S4a put credit spreads (10% max loss) | +0.6 | 9 | 0.13 | -7 | 86 (69% won) |
-| S4b put credit spreads (25% max loss) | +0.9 | 21 | 0.13 | -17 | 86 (69% won) |
-| C1 S3a 80% + S2 20% | +4.2 | 35 | 0.31 | -29 | – |
-| C2 S4a 80% + S2 20% | +1.1 | 9 | 0.22 | -9 | – |
+| S1 breakout calls (5%/trade) | +2.9 | 14 | 0.31 | -5 | 31 (39% won) |
+| S2 dip calls, score < 30 (5%/trade) | +4.3 | 16 | 0.52 | -13 | 21 (38% won) |
+| S3a ITM trend calls, 30% in premium | +3.8 | 41 | 0.28 | -33 | 29 (38% won) |
+| S3b ITM trend calls, 50% in premium | +2.9 | 59 | 0.27 | -50 | 29 (38% won) |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +5.1 | 34 | 0.34 | -30 | 20 (30% won) |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +6.2 | 51 | 0.35 | -45 | 20 (30% won) |
+| S4a put credit spreads (10% max loss) | +1.8 | 8 | 0.32 | -7 | 88 (70% won) |
+| S4b put credit spreads (25% max loss) | +4.0 | 21 | 0.33 | -17 | 88 (70% won) |
+| C1 S3a 80% + S2 20% | +4.0 | 34 | 0.30 | -28 | – |
+| C2 S4a 80% + S2 20% | +2.4 | 8 | 0.46 | -8 | – |
 
 ## 2001-2026 all (2001-02-01 to 2026-11-10)
 
@@ -61,51 +67,57 @@ All option strategies trade QQQ only and are priced off the actual VXN, the actu
 | 2x QQQ buy & hold (QLD-like) | +10.9 | 94 | 0.46 | -73 | – |
 | 2x QQQ while SPY > 200d | +16.4 | 50 | 0.66 | -42 | – |
 | 3x QQQ while SPY > 200d | +20.7 | 68 | 0.65 | -57 | – |
-| S1 breakout calls (5%/trade) | +0.8 | 24 | 0.13 | -7 | 158 (41% won) |
-| S2 dip calls, score < 30 (5%/trade) | +2.2 | 40 | 0.31 | -19 | 106 (39% won) |
-| S3a ITM trend calls, 30% in premium | +10.9 | 44 | 0.59 | -33 | 136 (46% won) |
-| S3b ITM trend calls, 50% in premium | +15.8 | 65 | 0.60 | -50 | 136 (46% won) |
-| S4a put credit spreads (10% max loss) | +1.7 | 11 | 0.32 | -7 | 394 (73% won) |
-| S4b put credit spreads (25% max loss) | +3.8 | 25 | 0.33 | -17 | 394 (73% won) |
-| C1 S3a 80% + S2 20% | +10.1 | 38 | 0.58 | -33 | – |
-| C2 S4a 80% + S2 20% | +1.8 | 12 | 0.37 | -9 | – |
+| S1 breakout calls (5%/trade) | +0.4 | 24 | 0.09 | -7 | 159 (40% won) |
+| S2 dip calls, score < 30 (5%/trade) | +2.7 | 40 | 0.35 | -26 | 110 (38% won) |
+| S3a ITM trend calls, 30% in premium | +9.9 | 46 | 0.54 | -34 | 136 (46% won) |
+| S3b ITM trend calls, 50% in premium | +14.0 | 66 | 0.55 | -51 | 136 (46% won) |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +10.4 | 38 | 0.63 | -30 | 98 (39% won) |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +15.6 | 55 | 0.64 | -46 | 98 (39% won) |
+| S4a put credit spreads (10% max loss) | +2.1 | 11 | 0.39 | -7 | 401 (74% won) |
+| S4b put credit spreads (25% max loss) | +4.8 | 26 | 0.39 | -17 | 401 (74% won) |
+| C1 S3a 80% + S2 20% | +9.1 | 40 | 0.54 | -33 | – |
+| C2 S4a 80% + S2 20% | +2.2 | 12 | 0.45 | -9 | – |
 
 ## Sensitivity to option pricing, 2001-2026 (CAGR % / Max DD % / Sharpe)
 
-| Strategy | no skew | base skew | steep skew |
-|---|---|---|---|
-| S1 breakout calls (5%/trade) | -0.1 / 28 / 0.04 | +0.8 / 24 / 0.13 | +0.8 / 26 / 0.13 |
-| S2 dip calls, score < 30 (5%/trade) | +1.6 / 46 / 0.24 | +2.2 / 40 / 0.31 | +1.8 / 46 / 0.26 |
-| S3a ITM trend calls, 30% in premium | +13.3 / 43 / 0.66 | +10.9 / 44 / 0.59 | +9.2 / 45 / 0.53 |
-| S3b ITM trend calls, 50% in premium | +19.7 / 63 / 0.67 | +15.8 / 65 / 0.60 | +13.2 / 66 / 0.54 |
-| S4a put credit spreads (10% max loss) | +3.6 / 13 / 0.53 | +1.7 / 11 / 0.32 | +0.2 / 15 / 0.07 |
-| S4b put credit spreads (25% max loss) | +8.4 / 30 / 0.54 | +3.8 / 25 / 0.33 | +0.1 / 37 / 0.07 |
+| Strategy | no skew | base skew | steep skew | base skew, flat term structure |
+|---|---|---|---|---|
+| S1 breakout calls (5%/trade) | -0.4 / 33 / 0.00 | +0.4 / 24 / 0.09 | +0.5 / 25 / 0.10 | +0.8 / 24 / 0.13 |
+| S2 dip calls, score < 30 (5%/trade) | +2.2 / 42 / 0.31 | +2.7 / 40 / 0.35 | +2.9 / 38 / 0.38 | +2.2 / 40 / 0.31 |
+| S3a ITM trend calls, 30% in premium | +12.7 / 44 / 0.64 | +9.9 / 46 / 0.54 | +8.1 / 47 / 0.48 | +10.9 / 44 / 0.59 |
+| S3b ITM trend calls, 50% in premium | +18.5 / 64 / 0.64 | +14.0 / 66 / 0.55 | +11.2 / 67 / 0.48 | +15.8 / 65 / 0.60 |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +12.2 / 37 / 0.69 | +10.4 / 38 / 0.63 | +9.4 / 38 / 0.59 | +12.7 / 36 / 0.76 |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +18.5 / 54 / 0.70 | +15.6 / 55 / 0.64 | +14.0 / 56 / 0.60 | +19.6 / 53 / 0.78 |
+| S4a put credit spreads (10% max loss) | +3.8 / 13 / 0.55 | +2.1 / 11 / 0.39 | +1.0 / 15 / 0.22 | +1.7 / 11 / 0.32 |
+| S4b put credit spreads (25% max loss) | +8.9 / 30 / 0.56 | +4.8 / 26 / 0.39 | +1.9 / 35 / 0.22 | +3.8 / 25 / 0.33 |
 
 ## Sensitivity to bid-ask costs, 2001-2026, base skew (CAGR % / Max DD % / Sharpe)
 
 | Strategy | 0.5% half spread | 1.0% half spread | 2.5% half spread |
 |---|---|---|---|
-| S1 breakout calls (5%/trade) | +0.8 / 24 / 0.13 | +0.6 / 24 / 0.11 | -0.4 / 32 / 0.01 |
-| S2 dip calls, score < 30 (5%/trade) | +2.2 / 40 / 0.31 | +2.4 / 38 / 0.34 | +1.9 / 40 / 0.27 |
-| S3a ITM trend calls, 30% in premium | +10.9 / 44 / 0.59 | +9.2 / 47 / 0.52 | +4.2 / 54 / 0.30 |
-| S3b ITM trend calls, 50% in premium | +15.8 / 65 / 0.60 | +12.9 / 67 / 0.52 | +4.5 / 75 / 0.30 |
-| S4a put credit spreads (10% max loss) | +1.7 / 11 / 0.32 | +1.8 / 11 / 0.35 | +1.8 / 11 / 0.35 |
-| S4b put credit spreads (25% max loss) | +3.8 / 25 / 0.33 | +4.1 / 25 / 0.35 | +4.1 / 26 / 0.35 |
+| S1 breakout calls (5%/trade) | +0.4 / 24 / 0.09 | +0.4 / 23 / 0.09 | -0.6 / 34 / -0.02 |
+| S2 dip calls, score < 30 (5%/trade) | +2.7 / 40 / 0.35 | +2.5 / 41 / 0.34 | +2.5 / 36 / 0.33 |
+| S3a ITM trend calls, 30% in premium | +9.9 / 46 / 0.54 | +8.2 / 48 / 0.47 | +3.2 / 56 / 0.26 |
+| S3b ITM trend calls, 50% in premium | +14.0 / 66 / 0.55 | +11.1 / 69 / 0.48 | +2.9 / 76 / 0.26 |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +10.4 / 38 / 0.63 | +9.1 / 40 / 0.57 | +5.5 / 47 / 0.38 |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +15.6 / 55 / 0.64 | +13.4 / 58 / 0.58 | +7.3 / 66 / 0.39 |
+| S4a put credit spreads (10% max loss) | +2.1 / 11 / 0.39 | +2.2 / 11 / 0.40 | +2.0 / 11 / 0.38 |
+| S4b put credit spreads (25% max loss) | +4.8 / 26 / 0.39 | +5.0 / 26 / 0.40 | +4.6 / 26 / 0.38 |
 
-## S3 parameter neighbourhood (base pricing)
+## S3 (LEAPS) parameter neighbourhood (base pricing)
 
-Moneyness 0.80/0.85/0.90 x DTE 90/120/180 x regime SMA 150/200/250 x roll at 20/30/45 DTE, for 30% and 50% of equity in premium.
+Moneyness 0.80/0.85/0.90 x DTE 180/270/365 x regime SMA 150/200/250 x roll at 30/60/90 DTE, for 30% and 50% of equity in premium.
 
 | Premium | Window | Combos | CAGR min / median / max % | Median Max DD % | Median Sharpe | Combos < 0 |
 |---:|---|---:|---|---:|---:|---:|
-| 30% | 2001-2010 stress | 81 | +2.3 / +5.4 / +9.7 | 38 | 0.39 | 0 |
-| 30% | 2011-2021 out of sample | 81 | +13.2 / +19.4 / +29.6 | 29 | 0.92 | 0 |
-| 30% | 2021-2026 in sample | 81 | +1.2 / +5.8 / +15.0 | 35 | 0.36 | 0 |
-| 30% | 2001-2026 all | 81 | +7.7 / +11.7 / +15.9 | 38 | 0.61 | 0 |
-| 50% | 2001-2010 stress | 81 | +0.9 / +7.3 / +13.1 | 57 | 0.40 | 0 |
-| 50% | 2011-2021 out of sample | 81 | +20.3 / +30.9 / +47.3 | 44 | 0.94 | 0 |
-| 50% | 2021-2026 in sample | 81 | -3.4 / +6.4 / +21.7 | 52 | 0.36 | 5 |
-| 50% | 2001-2026 all | 81 | +11.4 / +16.5 / +24.0 | 57 | 0.61 | 0 |
+| 30% | 2001-2010 stress | 81 | +3.5 / +5.2 / +7.3 | 34 | 0.39 | 0 |
+| 30% | 2011-2021 out of sample | 81 | +10.7 / +15.9 / +23.4 | 26 | 0.86 | 0 |
+| 30% | 2021-2026 in sample | 81 | +2.7 / +5.5 / +12.8 | 31 | 0.36 | 0 |
+| 30% | 2001-2026 all | 81 | +7.5 / +9.8 / +13.2 | 34 | 0.60 | 0 |
+| 50% | 2001-2010 stress | 81 | +4.7 / +6.9 / +9.8 | 51 | 0.39 | 0 |
+| 50% | 2011-2021 out of sample | 81 | +16.4 / +24.9 / +37.6 | 40 | 0.88 | 0 |
+| 50% | 2021-2026 in sample | 81 | +1.8 / +6.5 / +17.7 | 47 | 0.36 | 0 |
+| 50% | 2001-2026 all | 81 | +11.2 / +14.6 / +19.0 | 51 | 0.61 | 0 |
 
 ## Return by year, 2001-2026 (%)
 
@@ -115,14 +127,16 @@ Moneyness 0.80/0.85/0.90 x DTE 90/120/180 x regime SMA 150/200/250 x roll at 20/
 | 2x QQQ buy & hold (QLD-like) | -73 | -68 | +106 | +15 | -3 | +5 | +29 | -72 | +121 | +37 | -0 | +34 | +81 | +37 | +14 | +10 | +70 | -8 | +82 | +90 | +55 | -60 | +118 | +43 | +31 | +11 |
 | 2x QQQ while SPY > 200d | +0 | -21 | +62 | -1 | -19 | -4 | +11 | -11 | +64 | +5 | -12 | +28 | +81 | +33 | +3 | +17 | +70 | +0 | +45 | +46 | +55 | -42 | +67 | +43 | +14 | +3 |
 | 3x QQQ while SPY > 200d | +0 | -31 | +94 | -5 | -30 | -11 | +11 | -16 | +103 | +4 | -20 | +39 | +137 | +49 | +3 | +24 | +116 | -5 | +68 | +63 | +82 | -57 | +102 | +59 | +16 | -3 |
-| S1 breakout calls (5%/trade) | -3 | -7 | -6 | -0 | +7 | -0 | +1 | -3 | -1 | +7 | -6 | +7 | -2 | -1 | -4 | -4 | -1 | +3 | +4 | +24 | +1 | -4 | +9 | -3 | -0 | +8 |
-| S2 dip calls, score < 30 (5%/trade) | -13 | -19 | -2 | +5 | +10 | -4 | -2 | -19 | +23 | +23 | +1 | +0 | +0 | +11 | +12 | +2 | +0 | -5 | +20 | +11 | +0 | -17 | +9 | +0 | +13 | +16 |
-| S3a ITM trend calls, 30% in premium | +0 | -12 | +50 | -9 | -13 | -7 | +22 | -1 | +35 | +12 | -7 | +16 | +63 | +22 | -18 | +12 | +60 | -4 | +24 | +35 | +29 | -33 | +30 | +16 | +13 | +9 |
-| S3b ITM trend calls, 50% in premium | +0 | -19 | +91 | -17 | -22 | -16 | +38 | -1 | +58 | +16 | -12 | +18 | +118 | +37 | -29 | +19 | +112 | -9 | +42 | +61 | +52 | -50 | +48 | +25 | +18 | +10 |
-| S4a put credit spreads (10% max loss) | +0 | -5 | +10 | -0 | +1 | -2 | -1 | -0 | +7 | -1 | -1 | +2 | +11 | +1 | +3 | +5 | +9 | -6 | +6 | +3 | +7 | -7 | +4 | +8 | -2 | -3 |
-| S4b put credit spreads (25% max loss) | +0 | -13 | +25 | -1 | +2 | -5 | -4 | -1 | +20 | -4 | -4 | +5 | +28 | +2 | +7 | +13 | +25 | -17 | +14 | +6 | +18 | -17 | +10 | +20 | -6 | -8 |
-| C1 S3a 80% + S2 20% | -3 | -13 | +42 | -7 | -10 | -7 | +18 | -3 | +33 | +13 | -6 | +14 | +56 | +22 | -16 | +11 | +55 | -4 | +24 | +34 | +28 | -33 | +29 | +15 | +13 | +9 |
-| C2 S4a 80% + S2 20% | -3 | -8 | +8 | +1 | +2 | -2 | -1 | -3 | +9 | +2 | -1 | +2 | +9 | +3 | +5 | +4 | +8 | -6 | +8 | +4 | +6 | -9 | +5 | +6 | +0 | +0 |
+| S1 breakout calls (5%/trade) | -2 | -7 | -6 | -0 | +7 | -1 | +0 | -3 | -1 | +6 | -7 | +6 | -0 | -4 | -4 | -3 | -3 | +2 | +3 | +20 | +1 | -5 | +8 | -3 | -1 | +9 |
+| S2 dip calls, score < 30 (5%/trade) | -7 | -26 | -1 | +5 | +9 | -4 | +5 | -19 | +20 | +24 | +1 | +0 | +0 | +11 | +13 | +2 | +0 | -5 | +20 | +11 | +0 | -13 | +10 | +0 | +13 | +16 |
+| S3a ITM trend calls, 30% in premium | +0 | -12 | +54 | -9 | -14 | -9 | +20 | -1 | +35 | +9 | -9 | +14 | +60 | +20 | -20 | +10 | +56 | -5 | +22 | +37 | +30 | -34 | +29 | +15 | +12 | +9 |
+| S3b ITM trend calls, 50% in premium | +0 | -20 | +99 | -18 | -24 | -18 | +34 | -1 | +58 | +11 | -15 | +16 | +111 | +32 | -31 | +16 | +105 | -11 | +39 | +62 | +52 | -51 | +46 | +24 | +17 | +10 |
+| S3c LEAPS trend calls, 270d/roll 60, 30% | +0 | -10 | +47 | -6 | -11 | -9 | +15 | -1 | +31 | +7 | -2 | +12 | +52 | +19 | -12 | +9 | +44 | +3 | +23 | +39 | +34 | -30 | +25 | +22 | +11 | +4 |
+| S3d LEAPS trend calls, 270d/roll 60, 50% | +0 | -17 | +82 | -10 | -18 | -16 | +26 | -1 | +49 | +11 | -4 | +21 | +91 | +30 | -20 | +14 | +77 | +2 | +37 | +64 | +57 | -46 | +42 | +37 | +15 | +6 |
+| S4a put credit spreads (10% max loss) | +0 | -5 | +9 | -0 | -1 | -3 | -2 | -0 | +7 | -1 | +0 | +3 | +11 | +2 | +5 | +6 | +10 | -6 | +6 | +3 | +8 | -7 | +5 | +9 | -2 | +2 |
+| S4b put credit spreads (25% max loss) | +0 | -12 | +25 | -1 | -3 | -8 | -6 | -1 | +19 | -4 | +1 | +6 | +31 | +6 | +12 | +15 | +26 | -15 | +16 | +6 | +19 | -17 | +11 | +23 | -5 | +3 |
+| C1 S3a 80% + S2 20% | -1 | -15 | +45 | -8 | -11 | -8 | +17 | -3 | +33 | +11 | -8 | +12 | +53 | +19 | -17 | +10 | +51 | -5 | +22 | +35 | +28 | -33 | +28 | +14 | +12 | +9 |
+| C2 S4a 80% + S2 20% | -1 | -9 | +8 | +1 | +0 | -3 | -1 | -3 | +9 | +3 | +1 | +2 | +9 | +4 | +6 | +5 | +8 | -6 | +9 | +4 | +6 | -8 | +5 | +7 | +1 | +4 |
 
 ## Limits
 

@@ -60,6 +60,10 @@ class OptionSimConfig:
     put_skew_per_pct: float = 0.0
     call_skew_per_pct: float = 0.0
     skew_term_scaling: bool = True  # skew values are for 30-day options; scale by sqrt(30/days)
+    # IV term structure: the given IV is a 30-day vol; other expiries mean-revert toward
+    # iv_term_mean at speed iv_term_kappa (per year). None = flat term structure.
+    iv_term_mean: float | None = None
+    iv_term_kappa: float = 3.0
     breakout_lookback: int = 20
     trend_sma: int = 50
     hv_window: int = 20
@@ -71,7 +75,15 @@ class OptionSimConfig:
     # puts only while it closes below (bearish bets need no stock: long puts only).
     regime_symbol: str | None = None
     regime_sma: int = 50
+    # Hysteresis: a bull regime flips to bear only below SMA x (1 - buffer%), a bear regime
+    # flips to bull only above SMA x (1 + buffer%). 0 = plain close vs SMA.
+    regime_buffer_pct: float = 0.0
     untradable: tuple[str, ...] = ()
+    # Volatility targeting: scale the premium per trade by clip(vol_target / IV,
+    # vol_target_floor, vol_target_cap). None = off.
+    vol_target: float | None = None
+    vol_target_cap: float = 1.5
+    vol_target_floor: float = 0.25
     # Signals: "breakout" (calls on 20d highs, puts on 20d lows) or "bear_setups":
     # puts only on (a) an earnings-day gap down >= gap_down_pct on >= gap_volume_mult x
     # volume closing in the lower half of its range (any regime), or (b) a failed rally in a
@@ -170,6 +182,17 @@ class OptionSimResult:
         }
 
 
+def _term_iv(iv30: float, t: float, long_run: float, kappa: float) -> float:
+    """Average implied vol to expiry ``t`` (years) when variance mean-reverts to long_run**2."""
+
+    def g(x: float) -> float:
+        return (1 - math.exp(-kappa * x)) / (kappa * x)
+
+    t30 = 30 / 365
+    var = long_run**2 + (iv30**2 - long_run**2) * g(t) / g(t30)
+    return math.sqrt(max(var, 1e-6))
+
+
 def strike_step(price: float) -> float:
     if price < 25:
         return 0.5
@@ -229,6 +252,7 @@ class OptionSimulator:
         self.cfg = config or OptionSimConfig()
         self._rate_now = self.cfg.rate
         self._pending_rate: float | None = None
+        self._regime_state: str | None = None
         if self.cfg.regime_symbol and self.cfg.regime_symbol not in data:
             raise ValueError(f"regime_symbol {self.cfg.regime_symbol} is not in the data")
         self.cash = self.cfg.initial_cash
@@ -261,6 +285,8 @@ class OptionSimulator:
         for calls and puts alike (put-call parity: same strike, same IV)."""
         cfg = self.cfg
         t = max((lg.expiry - as_of).days, 0) / 365
+        if cfg.iv_term_mean is not None and t > 0:
+            iv = _term_iv(iv, t, cfg.iv_term_mean, cfg.iv_term_kappa)
         below = max((spot - lg.strike) / spot * 100, 0.0)
         above = max((lg.strike - spot) / spot * 100, 0.0)
         # skew per 1% flattens with expiry: scale by sqrt(30 / days), as is common
@@ -344,6 +370,7 @@ class OptionSimulator:
                 self._execute_at_open(s, bar, d)
                 self.history[s].append(bar)
                 self.atrs[s] = self.atr[s].update(bar)
+            self._update_regime()
             if start is not None and d < start:
                 continue
             for s in list(self.positions):
@@ -401,15 +428,29 @@ class OptionSimulator:
         return self.result
 
     def _regime(self) -> str | None:
-        """'bull' / 'bear' from the benchmark vs its SMA; None if no filter or no history."""
+        """'bull' / 'bear' for today (see _update_regime); None if no filter or history."""
+        return self._regime_state
+
+    def _update_regime(self) -> None:
+        """Once per day after the close is known: benchmark vs its SMA, with hysteresis."""
         cfg = self.cfg
         if not cfg.regime_symbol:
-            return None
+            return
         h = self.history[cfg.regime_symbol]
         if len(h) < cfg.regime_sma:
-            return None
+            return
         sma = sum(b.close for b in h[-cfg.regime_sma :]) / cfg.regime_sma
-        return "bull" if h[-1].close >= sma else "bear"
+        close, buf = h[-1].close, cfg.regime_buffer_pct / 100
+        state = self._regime_state
+        if state is None:
+            state = "bull" if close >= sma else "bear"
+        elif state == "bull" and close < sma * (1 - buf):
+            state = "bear"
+        elif state == "bear" and close >= sma * (1 + buf):
+            state = "bull"
+        if buf == 0:
+            state = "bull" if close >= sma else "bear"
+        self._regime_state = state
 
     def _signal(self, s: str, d: date, equity: float) -> OptionOrder | None:
         cfg, h = self.cfg, self.history[s]
@@ -482,6 +523,9 @@ class OptionSimulator:
     ) -> OptionOrder | None:
         cfg = self.cfg
         risk_pct = cfg.risk_per_trade_pct if risk_pct is None else risk_pct
+        if cfg.vol_target:
+            mult = cfg.vol_target / max(self._iv(s), 1e-6)
+            risk_pct *= min(max(mult, cfg.vol_target_floor), cfg.vol_target_cap)
         step = strike_step(close)
         expiry = expiry_after(d, cfg.target_dte)
         m = cfg.strike_moneyness

@@ -11,8 +11,9 @@ the LLM is only woken up for events that need judgement.
 > It reruns the option strategies on QQQ for 2001-2026 with VXN implied vol, the actual T-bill
 > rate, dividends, strike skew and realistic bid-ask, after fixing a credit-spread pricing bug.
 > Its conclusions supersede the earlier option sections below, which used realized-vol pricing.
-> The robust aggressive setup is leveraged trend-following (ITM QQQ calls or QLD while
-> SPY > 200d). Today's ticket: `scripts/strategy_today.py --fetch --equity <$>`.
+> The robust aggressive setup is leveraged trend-following: LEAPS-style ITM QQQ calls
+> (~15% ITM, ~270 days, rolled at 60) or QLD, held while SPY > 200d. Today's ticket:
+> `scripts/strategy_today.py --fetch --equity <$>`; refinements: `scripts/run_trend_variants.py`.
 
 ## Architecture
 

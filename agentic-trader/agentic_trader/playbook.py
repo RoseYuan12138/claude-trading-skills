@@ -1,9 +1,10 @@
 """Today's action for the ITM trend-call strategy (the most robust aggressive setup found).
 
 Rule (see docs/AGGRESSIVE_OPTIONS_STRATEGY.md): while SPY closes above its 200-day SMA,
-hold a QQQ call about 15% in the money with about 120 days to expiry, sized so the
-premium is a fixed share of the account; roll it when 30 days are left; sell and stay in
-cash when SPY closes below the SMA. The premium is the most the position can lose.
+hold a QQQ call about 15% in the money with about 270 days to expiry (a LEAPS-style
+call), sized so the premium is a fixed share of the account; roll it when 60 days are
+left; sell and stay in cash when SPY closes below the SMA. The premium is the most the
+position can lose.
 """
 
 from __future__ import annotations
@@ -15,18 +16,20 @@ from datetime import date
 from .models import Bar
 from .options import MULTIPLIER, Right
 from .pricing import bs_delta, bs_price
-from .sim.options_engine import expiry_after, round_strike, strike_step
+from .sim.options_engine import _term_iv, expiry_after, round_strike, strike_step
 
 
 @dataclass(frozen=True)
 class ItmTrendParams:
     moneyness: float = 0.85  # strike = close x moneyness (0.85 = 15% in the money)
-    target_dte: int = 120
-    roll_dte: int = 30
+    target_dte: int = 270
+    roll_dte: int = 60
     regime_sma: int = 200
     premium_pct: float = 30.0  # share of the account paid in premium (= max loss)
     put_skew_per_pct: float = 0.75  # strike skew used for the price estimate (30-day basis)
     div_yield: float = 0.007
+    iv_term_mean: float | None = 0.24  # long-dated IV mean-reverts toward this
+    iv_term_kappa: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,8 @@ class Ticket:
 def _estimate(qqq: float, strike: float, expiry: date, as_of: date, iv: float, rate: float, p):
     days = max((expiry - as_of).days, 1)
     t = days / 365
+    if p.iv_term_mean is not None:
+        iv = _term_iv(iv, t, p.iv_term_mean, p.iv_term_kappa)
     below = max((qqq - strike) / qqq * 100, 0.0)
     leg_iv = iv + math.sqrt(30 / max(days, 7)) * p.put_skew_per_pct * below / 100
     price = bs_price(qqq, strike, t, rate, leg_iv, Right.CALL, p.div_yield)
