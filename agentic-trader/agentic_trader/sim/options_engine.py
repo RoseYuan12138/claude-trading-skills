@@ -79,6 +79,7 @@ class OptionSimConfig:
     # flips to bull only above SMA x (1 + buffer%). 0 = plain close vs SMA.
     regime_buffer_pct: float = 0.0
     regime_also: tuple[str, ...] = ()  # extra symbols that must also be above their SMA for "bull"
+    regime_check: str = "daily"  # "daily" or "monthly" (re-evaluated on a month's first day)
     untradable: tuple[str, ...] = ()
     # Volatility targeting: scale the premium per trade by clip(vol_target / IV,
     # vol_target_floor, vol_target_cap). None = off.
@@ -440,6 +441,13 @@ class OptionSimulator:
         h = self.history[cfg.regime_symbol]
         if len(h) < cfg.regime_sma:
             return
+        if (
+            cfg.regime_check == "monthly"
+            and self._regime_state is not None
+            and len(h) >= 2
+            and h[-1].date.month == h[-2].date.month
+        ):
+            return  # keep last month's verdict until the first trading day of a new month
         sma = sum(b.close for b in h[-cfg.regime_sma :]) / cfg.regime_sma
         close, buf = h[-1].close, cfg.regime_buffer_pct / 100
         state = self._regime_state

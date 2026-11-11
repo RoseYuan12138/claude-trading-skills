@@ -807,3 +807,36 @@ def test_regime_also_requires_extra_symbols_above_their_sma():
     )
     res = both.run()
     assert not res.trades and not both.positions  # QQQ below its SMA blocks entries
+
+
+def test_monthly_regime_check_only_updates_on_the_first_trading_day_of_a_month():
+    days = business_days(date(2025, 1, 1), 120)
+    # rises, then dips hard mid-February (below SMA20) and recovers before March
+    prices = []
+    for i, d in enumerate(days):
+        p = 100 + i * 0.5
+        if date(2025, 2, 10) <= d <= date(2025, 2, 21):
+            p -= 15
+        prices.append(p)
+    bars = [Bar(d, p, p, p, p, 1e6) for d, p in zip(days, prices)]
+    base = dict(
+        signal_mode="index_trend",
+        hedge_symbols=("QQQ",),
+        regime_symbol="SPY",
+        regime_sma=20,
+        untradable=("SPY",),
+        strike_moneyness=0.85,
+        target_dte=120,
+        risk_per_trade_pct=20.0,
+        exit_on_regime_bear=True,
+    )
+    rules = OptionRules(max_loss_per_trade_pct=25, max_total_risk_pct=50, max_dte=200)
+    exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=30)
+    daily = OptionSimulator({"QQQ": bars, "SPY": bars}, rules, exits, OptionSimConfig(**base))
+    rd = daily.run()
+    monthly = OptionSimulator(
+        {"QQQ": bars, "SPY": bars}, rules, exits, OptionSimConfig(**base, regime_check="monthly")
+    )
+    rm = monthly.run()
+    assert any(t.reason == "regime_exit" for t in rd.trades)
+    assert not any(t.reason == "regime_exit" for t in rm.trades)  # the dip was inside a month

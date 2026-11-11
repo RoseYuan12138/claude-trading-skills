@@ -108,9 +108,15 @@ drawdown: the median max drawdown fell from 46% to 39%.
   with a flat term structure.
 - **Costs:** S3f was 17.2% / 15.0% / 8.7% at 0.5% / 1% / 2.5% half bid-ask. Limit orders near the
   mid are essential.
-- **Another index:** the same LEAPS rule on SPY (priced off VIX, SPY filter) earned +7.8% / 31% DD
-  (30%) and +11.8% / 46% DD (50%), against SPY buy & hold at +8.7% / 55% DD. So the effect is not
-  QQQ-only, but it is weaker on SPY.
+- **Other indexes (generalisation):** on SPY (priced off VIX, SPY filter) the LEAPS rule earned
+  +7.8% / 31% DD at 30% and +11.8% / 46% DD at 50%, against SPY buy & hold at +8.7% / 55% DD, so
+  it still works there, but more weakly. **On IWM (small caps; IV = VIX x 1.3) it failed:** +4.0-5.0%
+  a year against IWM buy & hold at +8.3%, and 2x IWM with the same filter earned only +6.2%.
+  The strategy is a leveraged bet on the Nasdaq-100's long-run drift, protected by a trend
+  filter. If that drift fades, results move toward the SPY numbers or below.
+- **Monthly instead of daily checks** (the regime is re-evaluated on the first trading day of each
+  month): 16.6% / 47% / 0.66 vs 17.2% / 41% / 0.71 for S3f, 2001-2026. Slightly worse, but
+  workable if you cannot check daily (`regime_check="monthly"`).
 
 ### What 10 years could look like (block bootstrap)
 
