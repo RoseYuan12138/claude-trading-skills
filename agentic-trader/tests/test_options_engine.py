@@ -778,3 +778,32 @@ def test_iv_term_structure_pulls_long_dated_vol_toward_the_long_run_level():
     assert calm._leg_price("QQQ", month, 100.0, last.date, 0.15) == pytest.approx(
         flat._leg_price("QQQ", month, 100.0, last.date, 0.15)
     )
+
+
+def test_regime_also_requires_extra_symbols_above_their_sma():
+    up = [100 + i * 0.5 for i in range(40)]
+    down = [120 - i * 0.5 for i in range(40)]
+    q_down = _path(down)
+    spy_up = _path(up)
+    base = dict(
+        signal_mode="index_trend",
+        hedge_symbols=("QQQ",),
+        regime_symbol="SPY",
+        regime_sma=20,
+        untradable=("SPY",),
+        strike_moneyness=0.85,
+        target_dte=120,
+        risk_per_trade_pct=20.0,
+    )
+    rules = OptionRules(max_loss_per_trade_pct=25, max_total_risk_pct=50, max_dte=200)
+    exits = OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=30)
+    only_spy = OptionSimulator(
+        {"QQQ": q_down, "SPY": spy_up}, rules, exits, OptionSimConfig(**base)
+    )
+    res = only_spy.run()
+    assert res.trades or only_spy.positions  # SPY alone says bull
+    both = OptionSimulator(
+        {"QQQ": q_down, "SPY": spy_up}, rules, exits, OptionSimConfig(**base, regime_also=("QQQ",))
+    )
+    res = both.run()
+    assert not res.trades and not both.positions  # QQQ below its SMA blocks entries

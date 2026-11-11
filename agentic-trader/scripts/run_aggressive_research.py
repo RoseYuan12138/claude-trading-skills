@@ -39,6 +39,7 @@ from agentic_trader.sim.options_engine import OptionSimConfig, OptionSimulator  
 from agentic_trader.sim.rotation import rotation_curve, synthetic_leveraged  # noqa: E402
 
 PERIODS = {
+    "2000-2026 from the dot-com peak": (date(2000, 1, 3), date(2026, 11, 10)),
     "2001-2010 stress": (date(2001, 2, 1), date(2010, 12, 31)),
     "2011-2021 out of sample": (date(2011, 1, 3), date(2021, 8, 31)),
     "2021-2026 in sample": (date(2021, 9, 1), date(2026, 11, 10)),
@@ -107,6 +108,32 @@ OPTION_STRATEGIES = {
         dict(
             signal_mode="index_trend",
             regime_symbol="SPY",
+            regime_sma=200,
+            exit_on_regime_bear=True,
+            strike_moneyness=0.85,
+            target_dte=270,
+        ),
+        OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=60),
+        50.0,
+    ),
+    "S3e LEAPS 270d, 30%, SPY and QQQ > 200d": (
+        dict(
+            signal_mode="index_trend",
+            regime_symbol="SPY",
+            regime_also=("QQQ",),
+            regime_sma=200,
+            exit_on_regime_bear=True,
+            strike_moneyness=0.85,
+            target_dte=270,
+        ),
+        OptionExitRules(stop_loss_pct=None, trail_after_pct=None, time_stop_dte=60),
+        30.0,
+    ),
+    "S3f LEAPS 270d, 50%, SPY and QQQ > 200d": (
+        dict(
+            signal_mode="index_trend",
+            regime_symbol="SPY",
+            regime_also=("QQQ",),
             regime_sma=200,
             exit_on_regime_bear=True,
             strike_moneyness=0.85,
@@ -219,6 +246,7 @@ def sweep_s3(option_curve_params, cash):
                 iv_term_kappa=TERM_KAPPA,
                 signal_mode="index_trend",
                 regime_symbol="SPY",
+                regime_also=("QQQ",),
                 regime_sma=sma,
                 exit_on_regime_bear=True,
                 strike_moneyness=m,
@@ -242,7 +270,7 @@ def sweep_s3(option_curve_params, cash):
             row.append(stats(curve))
         results.append(((m, dte, sma, roll, prem), row))
     out = [
-        "## S3 (LEAPS) parameter neighbourhood (base pricing)",
+        "## LEAPS parameter neighbourhood, SPY and QQQ > SMA (base pricing)",
         "",
         "Moneyness 0.80/0.85/0.90 x DTE 180/270/365 x regime SMA 150/200/250 x roll at "
         "30/60/90 DTE, for 30% and 50% of equity in premium.",
@@ -299,7 +327,11 @@ def main(argv=None) -> int:
             breadth_symbols=stocks,
         ).items()
     }
-    vxn = {"QQQ": {b.date: b.close for b in macro["^VXN"]}}
+    # VXN starts 2001-01-23; before that use VIX x 1.86 (the VXN/VIX ratio in 2001-2003,
+    # conservative for 2000: the overall median ratio is 1.21).
+    vxn_raw = {b.date: b.close for b in macro["^VXN"]}
+    vix_raw = {b.date: b.close for b in macro.get("^VIX", [])}
+    vxn = {"QQQ": {**{d: v * 1.86 for d, v in vix_raw.items()}, **vxn_raw}}
     irx = {b.date: b.close for b in adj["^IRX"]}
     two_x = synthetic_leveraged(adj["QQQ"], 2.0, irx, expense_pct=1.43)  # calibrated to QLD
     three_x = synthetic_leveraged(adj["QQQ"], 3.0, irx, expense_pct=2.53)  # calibrated to TQQQ
@@ -366,6 +398,8 @@ def main(argv=None) -> int:
         rows.append(("2x QQQ while SPY > 200d", stats(lev), "–"))
         lev3 = rotation_curve(three_x, adj["SPY"], start, end, sma=200)
         rows.append(("3x QQQ while SPY > 200d", stats(lev3), "–"))
+        both = rotation_curve(two_x, adj["SPY"], start, end, sma=200, regime_also=[adj["QQQ"]])
+        rows.append(("2x QQQ while SPY and QQQ > 200d", stats(both), "–"))
         curves = {}
         for name in OPTION_STRATEGIES:
             curve, res = option_curve(name, start, end, args.initial_cash)

@@ -89,3 +89,15 @@ def test_dynamic_leverage_respects_cap_and_regime():
     falling = bars([200 - i for i in range(120)])
     c = dynamic_leverage_curve(a, falling, tiny, DAYS[60], DAYS[-1], sma=20)
     assert c[-1][1] == pytest.approx(c[0][1])
+
+
+def test_rotation_regime_also_requires_every_series_above_its_sma():
+    a = bars([100 * 1.01**i for i in range(120)])
+    up = bars([100 + i for i in range(120)])
+    down = bars([300 - i for i in range(120)])
+    held = rotation_curve(a, up, DAYS[60], DAYS[-1], sma=20, switch_cost_bps=0)
+    blocked = rotation_curve(
+        a, up, DAYS[60], DAYS[-1], sma=20, switch_cost_bps=0, regime_also=[down]
+    )
+    assert held[-1][1] > held[0][1]
+    assert blocked[-1][1] == pytest.approx(blocked[0][1])

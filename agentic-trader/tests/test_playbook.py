@@ -15,7 +15,14 @@ def spy(rising: bool):
     ]
 
 
-def ticket(spy_bars, position=None, equity=100_000.0, **kw):
+def qqq(rising: bool):
+    return [
+        Bar(d, p, p, p, p, 1e6)
+        for d, p in ((d, 500 + (i if rising else -i) * 0.4) for i, d in enumerate(DAYS))
+    ]
+
+
+def ticket(spy_bars, position=None, equity=100_000.0, qqq_bars=None, **kw):
     return itm_trend_ticket(
         spy_bars,
         qqq_close=600.0,
@@ -25,6 +32,7 @@ def ticket(spy_bars, position=None, equity=100_000.0, **kw):
         rate=0.04,
         position=position,
         params=ItmTrendParams(**kw),
+        qqq_bars=qqq_bars if qqq_bars is not None else qqq(True),
     )
 
 
@@ -58,3 +66,15 @@ def test_too_small_account_cannot_buy_one_contract():
     t = ticket(spy(True), equity=5_000.0)
     assert t.action == "BUY" and t.contracts == 0
     assert "too small" in t.note
+
+
+def test_qqq_below_its_sma_means_cash_even_if_spy_is_bullish():
+    t = ticket(spy(True), qqq_bars=qqq(False))
+    assert t.action == "CASH" and "QQQ below" in t.note
+    t = ticket(spy(True), qqq_bars=qqq(False), require_qqq_trend=False)
+    assert t.action == "BUY"
+
+
+def test_require_qqq_trend_needs_qqq_bars():
+    with pytest.raises(ValueError):
+        itm_trend_ticket(spy(True), 600.0, DAYS[-1], 1e5, 0.22, 0.04, params=ItmTrendParams())

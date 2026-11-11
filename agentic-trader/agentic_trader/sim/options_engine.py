@@ -78,6 +78,7 @@ class OptionSimConfig:
     # Hysteresis: a bull regime flips to bear only below SMA x (1 - buffer%), a bear regime
     # flips to bull only above SMA x (1 + buffer%). 0 = plain close vs SMA.
     regime_buffer_pct: float = 0.0
+    regime_also: tuple[str, ...] = ()  # extra symbols that must also be above their SMA for "bull"
     untradable: tuple[str, ...] = ()
     # Volatility targeting: scale the premium per trade by clip(vol_target / IV,
     # vol_target_floor, vol_target_cap). None = off.
@@ -450,6 +451,12 @@ class OptionSimulator:
             state = "bull"
         if buf == 0:
             state = "bull" if close >= sma else "bear"
+        for extra in cfg.regime_also:
+            eh = self.history.get(extra) or []
+            if len(eh) >= cfg.regime_sma:
+                esma = sum(b.close for b in eh[-cfg.regime_sma :]) / cfg.regime_sma
+                if eh[-1].close < esma:
+                    state = "bear"
         self._regime_state = state
 
     def _signal(self, s: str, d: date, equity: float) -> OptionOrder | None:
@@ -474,11 +481,13 @@ class OptionSimulator:
                     s, d, equity, Right.CALL, "score_dip", h[-1].close, atr, risk
                 )
         if cfg.signal_mode == "put_credit":
-            if s not in cfg.hedge_symbols or not atr or self._regime() == "bear":
+            wanted = self._regime() == "bull" if cfg.regime_symbol else True
+            if s not in cfg.hedge_symbols or not atr or not wanted:
                 return None
             return self._build_put_credit(s, d, equity, h[-1].close)
         if cfg.signal_mode == "index_trend":
-            if s not in cfg.hedge_symbols or not atr or self._regime() == "bear":
+            wanted = self._regime() == "bull" if cfg.regime_symbol else True
+            if s not in cfg.hedge_symbols or not atr or not wanted:
                 return None
             return self._build_order(s, d, equity, Right.CALL, "trend", h[-1].close, atr)
         if cfg.signal_mode == "index_hedge":

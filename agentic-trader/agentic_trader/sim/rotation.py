@@ -22,16 +22,18 @@ def rotation_curve(
     switch_cost_bps: float = 10.0,
     cash_rate: float = 0.0,
     initial: float = 1.0,
+    regime_also: list[list[Bar]] | None = None,
 ) -> list[tuple[date, float]]:
-    """Equity curve. ``regime=None`` means always invested (buy & hold)."""
+    """Equity curve. ``regime=None`` means always invested (buy & hold). Every series in
+    ``regime_also`` must also be above its own SMA for the asset to be held."""
     closes = {b.date: b.close for b in asset}
     dates = [b.date for b in asset if start <= b.date <= end]
     rc = {}
     if regime is not None:
-        rcl = [b.close for b in regime]
-        for i, b in enumerate(regime):
-            if i >= sma - 1:
-                rc[b.date] = rcl[i] >= sum(rcl[i - sma + 1 : i + 1]) / sma
+        rc = _above_sma(regime, sma)
+        for extra in regime_also or []:
+            other = _above_sma(extra, sma)
+            rc = {d: ok and other.get(d, False) for d, ok in rc.items()}
     asset_dates = [b.date for b in asset]
     prev_of = {d: asset_dates[i - 1] for i, d in enumerate(asset_dates) if i > 0}
 
@@ -52,6 +54,15 @@ def rotation_curve(
         invested = want
         curve.append((d, equity))
     return curve
+
+
+def _above_sma(bars: list[Bar], sma: int) -> dict[date, bool]:
+    closes = [b.close for b in bars]
+    return {
+        b.date: closes[i] >= sum(closes[i - sma + 1 : i + 1]) / sma
+        for i, b in enumerate(bars)
+        if i >= sma - 1
+    }
 
 
 def synthetic_leveraged(

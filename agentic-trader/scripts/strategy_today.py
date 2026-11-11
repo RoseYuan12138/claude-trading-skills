@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Print today's action for the ITM trend-call strategy (and the QLD alternative).
 
-Rule: while SPY closes above its 200-day SMA, hold a ~15% in-the-money QQQ call with
+Rule: while SPY and QQQ both close above their 200-day SMAs, hold a ~15% ITM QQQ call with
 ~270 days to expiry, premium = --premium-pct of the account; roll at 60 days left; sell
-and hold cash when SPY closes below the SMA. Prices are model estimates from VXN; check
+and hold cash when either closes below its SMA. Prices are model estimates from VXN; check
 the real quote (and use a limit order near the mid) before trading.
 
 Examples:
@@ -69,13 +69,15 @@ def main(argv=None) -> int:
     irx = next(b.close for b in reversed(data["^IRX"]) if b.date <= as_of)
     params = ItmTrendParams(premium_pct=args.premium_pct)
     t = itm_trend_ticket(
-        spy, qqq_close, as_of, args.equity, vxn / 100, irx / 100, args.position, params
+        spy, qqq_close, as_of, args.equity, vxn / 100, irx / 100, args.position, params, qqq
     )
+    spy_ok = t.regime_close >= t.regime_sma
+    qqq_ok = t.qqq_close >= t.qqq_sma
 
     print(
         f"As of {as_of}: SPY {t.regime_close:.2f} vs 200d SMA {t.regime_sma:.2f} "
-        f"({'BULL' if t.regime_close >= t.regime_sma else 'BEAR'}); QQQ {qqq_close:.2f}; "
-        f"VXN {vxn:.1f}; T-bill {irx:.2f}%"
+        f"({'above' if spy_ok else 'below'}); QQQ {t.qqq_close:.2f} vs 200d SMA "
+        f"{t.qqq_sma:.2f} ({'above' if qqq_ok else 'below'}); VXN {vxn:.1f}; T-bill {irx:.2f}%"
     )
     print(f"ACTION: {t.action}")
     if t.action in {"BUY", "ROLL", "HOLD"}:
@@ -101,7 +103,7 @@ def main(argv=None) -> int:
         print(f"  Sell {t.contracts} contract(s) and hold cash until SPY closes above its SMA")
     else:
         print(f"  {t.note}")
-    if t.regime_close >= t.regime_sma and t.exposure > 0:
+    if spy_ok and qqq_ok and t.exposure > 0:
         qld = min(t.exposure / 2, 1.0) * args.equity
         print(f"ETF alternative with the same exposure: ${qld:,.0f} in QLD (2x QQQ), rest in cash")
     print("Estimates come from a model (VXN + skew). Check the real quote before trading.")

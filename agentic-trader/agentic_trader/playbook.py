@@ -1,9 +1,10 @@
 """Today's action for the ITM trend-call strategy (the most robust aggressive setup found).
 
-Rule (see docs/AGGRESSIVE_OPTIONS_STRATEGY.md): while SPY closes above its 200-day SMA,
+Rule (see docs/AGGRESSIVE_OPTIONS_STRATEGY.md): while SPY and QQQ both close above their
+200-day SMAs,
 hold a QQQ call about 15% in the money with about 270 days to expiry (a LEAPS-style
 call), sized so the premium is a fixed share of the account; roll it when 60 days are
-left; sell and stay in cash when SPY closes below the SMA. The premium is the most the
+left; sell and stay in cash when either closes below its SMA. The premium is the most the
 position can lose.
 """
 
@@ -25,6 +26,7 @@ class ItmTrendParams:
     target_dte: int = 270
     roll_dte: int = 60
     regime_sma: int = 200
+    require_qqq_trend: bool = True  # QQQ must also be above its own SMA (needs qqq_bars)
     premium_pct: float = 30.0  # share of the account paid in premium (= max loss)
     put_skew_per_pct: float = 0.75  # strike skew used for the price estimate (30-day basis)
     div_yield: float = 0.007
@@ -44,6 +46,8 @@ class Ticket:
     action: str  # BUY / HOLD / ROLL / SELL / CASH
     regime_close: float
     regime_sma: float
+    qqq_close: float = 0.0
+    qqq_sma: float = 0.0
     strike: float = 0.0
     expiry: date | None = None
     est_price: float = 0.0  # per share
@@ -75,20 +79,36 @@ def itm_trend_ticket(
     rate: float,
     position: OpenCall | None = None,
     params: ItmTrendParams | None = None,
+    qqq_bars: list[Bar] | None = None,
 ) -> Ticket:
-    """Decide today's action. ``iv`` and ``rate`` are annual decimals (VXN 22 -> 0.22)."""
+    """Decide today's action. ``iv`` and ``rate`` are annual decimals (VXN 22 -> 0.22).
+
+    With ``params.require_qqq_trend`` (the default) ``qqq_bars`` must be given and QQQ must
+    also close above its own SMA."""
     p = params or ItmTrendParams()
     closes = [b.close for b in spy_bars if b.date <= as_of]
     if len(closes) < p.regime_sma:
         raise ValueError(f"need {p.regime_sma} SPY closes, got {len(closes)}")
     sma = sum(closes[-p.regime_sma :]) / p.regime_sma
     bull = closes[-1] >= sma
-    base = dict(regime_close=closes[-1], regime_sma=sma)
+    why = "SPY below its SMA"
+    q_close = q_sma = 0.0
+    if p.require_qqq_trend:
+        if not qqq_bars:
+            raise ValueError("require_qqq_trend needs qqq_bars")
+        qc = [b.close for b in qqq_bars if b.date <= as_of]
+        if len(qc) < p.regime_sma:
+            raise ValueError(f"need {p.regime_sma} QQQ closes, got {len(qc)}")
+        q_close, q_sma = qc[-1], sum(qc[-p.regime_sma :]) / p.regime_sma
+        if q_close < q_sma:
+            bull = False
+            why = "QQQ below its SMA" if closes[-1] >= sma else "SPY and QQQ below their SMAs"
+    base = dict(regime_close=closes[-1], regime_sma=sma, qqq_close=q_close, qqq_sma=q_sma)
 
     if not bull:
         if position:
-            return Ticket("SELL", **base, contracts=position.contracts, note="SPY below its SMA")
-        return Ticket("CASH", **base, note="SPY below its SMA: stay in cash")
+            return Ticket("SELL", **base, contracts=position.contracts, note=why)
+        return Ticket("CASH", **base, note=f"{why}: stay in cash")
 
     if position and (position.expiry - as_of).days > p.roll_dte:
         price, delta = _estimate(qqq_close, position.strike, position.expiry, as_of, iv, rate, p)

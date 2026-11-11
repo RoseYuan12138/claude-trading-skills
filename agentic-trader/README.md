@@ -12,7 +12,8 @@ the LLM is only woken up for events that need judgement.
 > rate, dividends, strike skew and realistic bid-ask, after fixing a credit-spread pricing bug.
 > Its conclusions supersede the earlier option sections below, which used realized-vol pricing.
 > The robust aggressive setup is leveraged trend-following: LEAPS-style ITM QQQ calls
-> (~15% ITM, ~270 days, rolled at 60) or QLD, held while SPY > 200d. Today's ticket:
+> (~15% ITM, ~270 days, rolled at 60) or QLD, held while SPY and QQQ are both above their
+> 200-day SMAs. Today's ticket:
 > `scripts/strategy_today.py --fetch --equity <$>`; refinements: `scripts/run_trend_variants.py`.
 
 ## Architecture
