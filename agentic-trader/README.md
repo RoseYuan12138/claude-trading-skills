@@ -7,6 +7,13 @@ the LLM is only woken up for events that need judgement.
 > **Status: simulation + risk gate only.** Nothing here places real orders yet. The live
 > pieces (Layer 1 daemon, `claude -p` runner, snapshot writer) are on the roadmap below.
 
+> **Latest research (2026-11-11): [docs/AGGRESSIVE_OPTIONS_STRATEGY.md](docs/AGGRESSIVE_OPTIONS_STRATEGY.md).**
+> It reruns the option strategies on QQQ for 2001-2026 with VXN implied vol, the actual T-bill
+> rate, dividends, strike skew and realistic bid-ask, after fixing a credit-spread pricing bug.
+> Its conclusions supersede the earlier option sections below, which used realized-vol pricing.
+> The robust aggressive setup is leveraged trend-following (ITM QQQ calls or QLD while
+> SPY > 200d). Today's ticket: `scripts/strategy_today.py --fetch --equity <$>`.
+
 ## Architecture
 
 ```
@@ -47,6 +54,10 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `scripts/run_hedge_backtest.py` | Aggressive longs + regime-triggered QQQ put hedge |
 | `scripts/run_system_backtest.py` | Whole-system backtest (long sleeve + bear setups) |
 | `scripts/run_long_short_sim.py` | Long shares + regime-gated put sleeve backtest |
+| `agentic_trader/playbook.py` + `scripts/strategy_today.py` | Today's action for the ITM trend-call strategy (and the QLD alternative) |
+| `agentic_trader/sim/rotation.py` | Regime rotation and synthetic leveraged-ETF benchmarks |
+| `scripts/run_aggressive_research.py` | Final QQQ option research, 2001-2026, with skew/cost sensitivity and parameter sweep |
+| `scripts/run_combined_calls.py` | Breakout calls + dip calls, in and out of sample |
 | `scripts/fetch_ohlcv.py` | Daily OHLCV from Yahoo Finance's chart API into CSVs |
 | `scripts/replay_portfolio.py` | Replay real holdings from a start date: buy & hold vs stops vs agent, daily action log |
 | `config/` | Risk rules (sim / live) and the MCP tool mapping |
@@ -116,6 +127,8 @@ drawdown. Volume confirmation halves drawdown but also trades and return. The 20
 reacts too slowly, and stacking filters over-restricts.
 
 ## Options agent (independent entries)
+
+> Superseded by [docs/AGGRESSIVE_OPTIONS_STRATEGY.md](docs/AGGRESSIVE_OPTIONS_STRATEGY.md): the results below used realized-vol option pricing.
 
 The agent may open its own calls and puts (and verticals). Hard rules in
 `agentic_trader/options.py`, enforced before any order:
@@ -211,6 +224,8 @@ false alarms and it buys after the drop has begun, when puts are expensive.
 
 ## Aggressive option buying sweep
 
+> Superseded by [docs/AGGRESSIVE_OPTIONS_STRATEGY.md](docs/AGGRESSIVE_OPTIONS_STRATEGY.md): the results below used realized-vol option pricing.
+
 `scripts/run_aggressive_options.py` (`docs/sample_aggressive_options.md`) sweeps premium per trade
 (2/5/10%), total premium cap (10/25/50%), puts on/off and stops on/off: calls on breakouts while
 SPY is above its 50d SMA, puts on breakdowns while it is below.
@@ -227,6 +242,8 @@ SPY is above its 50d SMA, puts on breakdowns while it is below.
   trades above realized vol, and well above it before earnings, so real chains are needed.
 
 ## Market score -> call/put tiers
+
+> Superseded by [docs/AGGRESSIVE_OPTIONS_STRATEGY.md](docs/AGGRESSIVE_OPTIONS_STRATEGY.md): the results below used realized-vol option pricing.
 
 `agentic_trader/market_score.py` computes a 0-100 score as the equal-weight mean of trend (SPY vs
 50d/200d), breadth, 20d momentum, distance from the 1y high, VIX, and HYG vs its 50d (use
