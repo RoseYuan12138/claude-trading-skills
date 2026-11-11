@@ -41,6 +41,7 @@ Risk-reducing actions (exits, tightening a stop) are never blocked. Risk-increas
 | `scripts/run_options_sim.py` | Options backtest on real OHLCV vs a stock baseline |
 | `scripts/compare_entry_filters.py` | Entry-filter comparison (regime / earnings blackout / volume) on real data |
 | `agentic_trader/market_score.py` | 0-100 market score and score tiers |
+| `scripts/run_score_dip_calls.py` | Low-score QQQ calls, in and out of sample, VXN-priced |
 | `scripts/run_score_strategy.py` | Score predictive check + score-tiered call/put backtest |
 | `scripts/run_aggressive_options.py` | Sweep of option aggressiveness, stops and puts |
 | `scripts/run_hedge_backtest.py` | Aggressive longs + regime-triggered QQQ put hedge |
@@ -243,6 +244,22 @@ fixed before testing.
 - Use it as a risk thermometer (for example, to scale size or tighten stops). Do not use it as a
   call/put switch. "Buy calls when the score is low" fits this data, but it was found in-sample,
   so it is a hypothesis for the forward paper test, not a rule.
+
+### Low score -> buy QQQ calls (out-of-sample test)
+
+`OptionSimConfig(signal_mode="score_dip", dip_threshold=30)` buys an ATM 45-DTE QQQ call when the
+score is below the threshold and the account is flat; `iv_overrides` prices QQQ options off the
+actual VXN. `scripts/run_score_dip_calls.py` (`docs/sample_score_dip_calls.md`) fixes the rule,
+then tests it on 2011-2021 (out of sample) and 2021-2026 (where the idea came from).
+
+- Average result per trade: +0.34R out of sample (27 trades) and +0.27R in sample (19). Buying
+  calls on any day averaged +0.09R / +0.04R, and buying only when the score is above 70,
+  +0.06R. Pooled t of about 1.8; trades cluster in a few selloffs, so treat this as suggestive,
+  not proven.
+- Low scores are rare, so the money sits idle about 80% of the time: +14% over 2011-2021 at 2% per
+  trade (+38% at 5%), against +587% for QQQ buy & hold. This is an add-on, not a standalone
+  strategy. Stops helped (+5% without). The threshold is kept at 30: 20 looked better out of
+  sample but lost in sample.
 
 ## Going live on the Mac mini (planned steps)
 

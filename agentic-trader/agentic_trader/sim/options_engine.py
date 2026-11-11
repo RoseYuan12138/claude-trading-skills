@@ -79,6 +79,8 @@ class OptionSimConfig:
     # Market-score tiers (see market_score.py): when set, each day's score picks whether
     # calls / puts are allowed, the premium per trade and the cap on premium at risk.
     score_tiers: tuple[ScoreTier, ...] = ()
+    # "score_dip": buy a call on hedge_symbols whenever the day's score is below this
+    dip_threshold: float = 30.0
     # Entry filters applied to every signal
     earnings_blackout_days: int = 0  # skip entries with earnings this many calendar days ahead
     max_iv: float | None = None  # skip when the modelled IV is above this (e.g. 0.8)
@@ -181,10 +183,14 @@ class OptionSimulator:
         name: str = "",
         calendar: EventCalendar | None = None,
         scores: dict[date, float] | None = None,
+        iv_overrides: dict[str, dict[date, float]] | None = None,
     ):
         self.data = data
         self.calendar = calendar or EventCalendar()
         self.scores = scores or {}
+        # symbol -> {date: implied vol in index points, e.g. VXN 25.0 = 25%}; used as-is
+        # (no iv_premium) on the latest bar already known, so open fills use yesterday's.
+        self.iv_overrides = iv_overrides or {}
         self.rules = rules
         self.exits = exits
         self.cfg = config or OptionSimConfig()
@@ -202,6 +208,11 @@ class OptionSimulator:
     # ------------------------------------------------------------ pricing
 
     def _iv(self, sym: str) -> float:
+        override = self.iv_overrides.get(sym)
+        if override and self.history[sym]:
+            v = override.get(self.history[sym][-1].date)
+            if v is not None:
+                return max(v / 100, self.cfg.iv_floor)
         closes = [b.close for b in self.history[sym][-self.cfg.hv_window - 1 :]]
         if len(closes) < 3:
             return self.cfg.iv_floor
@@ -338,6 +349,13 @@ class OptionSimulator:
         if s in cfg.untradable:
             return None
         atr = self.atrs.get(s)
+        if cfg.signal_mode == "score_dip":
+            score = self.scores.get(d)
+            if s not in cfg.hedge_symbols or not atr or score is None:
+                return None
+            if score >= cfg.dip_threshold:
+                return None
+            return self._build_order(s, d, equity, Right.CALL, "score_dip", h[-1].close, atr)
         if cfg.signal_mode == "index_hedge":
             if s not in cfg.hedge_symbols or not atr or self._regime() != "bear":
                 return None

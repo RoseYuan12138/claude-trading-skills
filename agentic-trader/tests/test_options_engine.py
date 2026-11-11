@@ -362,3 +362,50 @@ def test_no_score_for_the_day_means_no_entry():
     sim = OptionSimulator({"X": up}, RULES, EXITS, OptionSimConfig(score_tiers=TIERS), scores={})
     res = sim.run()
     assert not res.trades and not sim.positions
+
+
+# ------------------------------------------------------- score dip + IV override
+
+
+def _dip_sim(path, score_by_index, **cfg):
+    bars = _path(path)
+    scores = {b.date: score_by_index(i) for i, b in enumerate(bars)}
+    base = dict(signal_mode="score_dip", hedge_symbols=("QQQ",), dip_threshold=30.0)
+    sim = OptionSimulator(
+        {"QQQ": bars}, RULES, EXITS, OptionSimConfig(**{**base, **cfg}), scores=scores
+    )
+    return sim, sim.run(), bars
+
+
+def test_score_dip_buys_call_only_when_score_is_low():
+    path = [100 + (0.3 if i % 2 else -0.3) for i in range(80)]
+    sim, res, bars = _dip_sim(path, lambda i: 20 if i == 60 else 60)
+    entries = [t.entry_date for t in res.trades] + [p.entry_date for p in sim.positions.values()]
+    assert entries == [bars[61].date]
+    rights = [t.right for t in res.trades] + [p.right for p in sim.positions.values()]
+    assert rights == [Right.CALL]
+    sim, res, _ = _dip_sim(path, lambda i: 60)
+    assert not res.trades and not sim.positions
+
+
+def test_iv_override_prices_options_with_the_given_vol():
+    path = [100 + (0.3 if i % 2 else -0.3) for i in range(80)]
+    cheap_sim, _, bars = _dip_sim(path, lambda i: 20 if i == 60 else 60)
+    iv = {"QQQ": {b.date: 60.0 for b in bars}}  # 60% implied vol, in index points
+    pricey_sim = OptionSimulator(
+        {"QQQ": bars},
+        RULES,
+        EXITS,
+        OptionSimConfig(signal_mode="score_dip", hedge_symbols=("QQQ",), dip_threshold=30.0),
+        scores={b.date: (20 if i == 60 else 60) for i, b in enumerate(bars)},
+        iv_overrides=iv,
+    )
+    pricey_res = pricey_sim.run()
+
+    def entry_price(sim, res):
+        prices = [p.entry_price for p in sim.positions.values()]
+        return (prices + [t.entry_price for t in res.trades])[0]
+
+    cheap = entry_price(cheap_sim, cheap_sim.result)
+    pricey = entry_price(pricey_sim, pricey_res)
+    assert pricey > cheap * 3
