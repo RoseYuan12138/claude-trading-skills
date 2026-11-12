@@ -70,24 +70,36 @@ def synthetic_leveraged(
     leverage: float,
     rates_pct: dict[date, float] | None = None,
     expense_pct: float = 0.95,
+    intraday: bool = False,
 ) -> list[Bar]:
     """Daily-rebalanced leveraged series (like QLD/TQQQ) built from an index ETF.
 
     Daily return = L x index return - (L - 1) x short rate - expense ratio (both annual,
     accrued per trading day). ``rates_pct`` maps dates to the annual short rate in percent
-    (e.g. ^IRX); the last known rate carries forward.
+    (e.g. ^IRX); the last known rate carries forward. With ``intraday`` the open, high and
+    low are L x the index move from the previous close (exact for a fund rebalanced at the
+    close); otherwise all four prices equal the close.
     """
     out: list[Bar] = []
     level, rate = 100.0, 0.0
     for i, b in enumerate(bars):
         if rates_pct and b.date in rates_pct:
             rate = rates_pct[b.date] / 100
+        o = h = low = level
         if i:
-            r = b.close / bars[i - 1].close - 1
-            level *= max(
-                1 + leverage * r - (leverage - 1) * rate / 252 - expense_pct / 100 / 252, 0.0
-            )
-        out.append(Bar(b.date, level, level, level, level, b.volume))
+            pc = bars[i - 1].close
+            carry = (leverage - 1) * rate / 252 + expense_pct / 100 / 252
+
+            def lev(px: float, base: float = level, pc: float = pc, carry: float = carry):
+                return base * max(1 + leverage * (px / pc - 1) - carry, 0.0)
+
+            o, h, low = lev(b.open), lev(b.high), lev(b.low)
+            level = lev(b.close)
+        if intraday and i:
+            hi_, lo_ = (h, low) if leverage > 0 else (low, h)
+            out.append(Bar(b.date, o, max(hi_, o, level), min(lo_, o, level), level, b.volume))
+        else:
+            out.append(Bar(b.date, level, level, level, level, b.volume))
     return out
 
 

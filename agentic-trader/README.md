@@ -16,6 +16,10 @@ the LLM is only woken up for events that need judgement.
 > 200-day SMAs. Today's ticket:
 > `scripts/strategy_today.py --fetch --equity <$>`; refinements: `scripts/run_trend_variants.py`.
 
+> **Stop-loss study (2026-11-12): [docs/STOP_STUDY.md](docs/STOP_STUDY.md).** Trailing stops on
+> SPY / QQQ / TQQQ / SOXL with intraday stop orders vs close checks: stops are crash insurance
+> that costs return; tight stops lose; on 3x ETFs some exit rule is mandatory.
+
 ## Architecture
 
 ```
