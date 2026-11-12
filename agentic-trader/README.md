@@ -293,7 +293,7 @@ then tests it on 2011-2021 (out of sample) and 2021-2026 (where the idea came fr
    Unknown tools on that server are blocked.
 3. Register the hook in the Claude Code settings used for trading:
    ```json
-   {"hooks": {"PreToolUse": [{"matcher": "mcp__robinhood__.*",
+   {"hooks": {"PreToolUse": [{"matcher": "mcp__robinhood-trading__.*",
      "hooks": [{"type": "command",
                 "command": "python3 /ABSOLUTE/PATH/agentic-trader/scripts/risk_gate_hook.py"}]}]}}
    ```

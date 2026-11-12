@@ -30,7 +30,7 @@ def snapshot(age_min=1, **kw):
 
 
 def call(tool, **tool_input):
-    return {"tool_name": f"mcp__robinhood__{tool}", "tool_input": tool_input}
+    return {"tool_name": f"mcp__robinhood-trading__{tool}", "tool_input": tool_input}
 
 
 def ev(payload, snap):
@@ -193,7 +193,7 @@ def opt_call(**tool_input):
         price=136.0,
     )
     base.update(tool_input)
-    return {"tool_name": "mcp__robinhood__place_option_order", "tool_input": base}
+    return {"tool_name": "mcp__robinhood-trading__place_option_order", "tool_input": base}
 
 
 def ev_opt(payload, snap, option_rules=OPT_RULES):

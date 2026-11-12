@@ -8,7 +8,7 @@
 
 # Claude Code names MCP tools mcp__<server-name>__<tool>; <server-name> is whatever you
 # passed to `claude mcp add`.
-server_prefix: mcp__robinhood
+server_prefix: mcp__robinhood-trading  # from: claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading
 
 read_only_prefixes: [get, list, search, fetch, view, describe]
 

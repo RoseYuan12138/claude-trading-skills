@@ -2,7 +2,7 @@
 
 Wire-up (in the Claude Code settings used on the trading machine):
 
-    "hooks": {"PreToolUse": [{"matcher": "mcp__robinhood__.*",
+    "hooks": {"PreToolUse": [{"matcher": "mcp__robinhood-trading__.*",
         "hooks": [{"type": "command",
                    "command": "python3 /path/to/agentic-trader/scripts/risk_gate_hook.py"}]}]}
 
@@ -48,7 +48,7 @@ _ORDER_TYPES = {
 
 @dataclass
 class ToolMap:
-    server_prefix: str = "mcp__robinhood"
+    server_prefix: str = "mcp__robinhood-trading"
     read_only_prefixes: tuple[str, ...] = ("get", "list", "search", "fetch", "view", "describe")
     cancel_prefixes: tuple[str, ...] = ("cancel",)
     cancel_policy: str = "allow"  # "allow" or "deny"
