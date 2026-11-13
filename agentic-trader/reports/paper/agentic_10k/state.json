@@ -1,6 +1,6 @@
 {
   "cash": 687.8587737074686,
-  "last_mark": 92.65812165465206,
+  "last_mark": 90.9147436188386,
   "position": {
     "strike": 655.0,
     "expiry": "2027-08-20",
@@ -20,6 +20,18 @@
       "fill": 93.12141226292532,
       "equity": 9953.670939172674,
       "note": ""
+    },
+    {
+      "date": "2026-11-12",
+      "action": "HOLD",
+      "contracts": 1,
+      "strike": 655.0,
+      "expiry": "2027-08-20",
+      "model_price": 90.9147436188386,
+      "quote": null,
+      "fill": 0.0,
+      "equity": 9779.333135591329,
+      "note": "281 days left; roll at 60"
     }
   ],
   "stop_reason": null

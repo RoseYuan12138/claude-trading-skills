@@ -101,7 +101,9 @@ def main(argv=None) -> int:
         if t.note:
             print(f"  Note: {t.note}")
     elif t.action == "SELL":
-        print(f"  Sell {t.contracts} contract(s) and hold cash until SPY closes above its SMA")
+        print(
+            f"  Sell {t.contracts} contract(s) and hold cash until SPY and QQQ both close above their SMAs"
+        )
     else:
         print(f"  {t.note}")
     if spy_ok and qqq_ok and t.exposure > 0:
