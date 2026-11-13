@@ -87,7 +87,7 @@ def main(argv=None) -> int:
         P = periods(sym)
         runs = {}
 
-        def run(ex, en, per):
+        def run(ex, en, per, runs=runs, P=P, bars=bars):
             key = (str(ex), str(en), per)
             if key not in runs:
                 a, b = P[per]
