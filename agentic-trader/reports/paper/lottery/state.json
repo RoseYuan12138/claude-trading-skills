@@ -1,0 +1,27 @@
+{
+  "cash": 440.0,
+  "rate": 0.041,
+  "rules": {
+    "max_ticket": 100.0,
+    "take_profit_multiple": 3.0
+  },
+  "tickets": [
+    {
+      "symbol": "INTC",
+      "right": "call",
+      "strike": 92.5,
+      "expiry": "2027-01-15",
+      "contracts": 1,
+      "entry_price": 0.6,
+      "entry_date": "2026-11-13",
+      "entry_spot": 61.2,
+      "entry_iv": 0.6537691227248548,
+      "thesis": "User-chosen lottery ticket. INTC realised vol 86-144% vs ~65% implied; needs +52% by 1/15; no earnings before expiry",
+      "status": "open",
+      "mark": 0.5999999999999996,
+      "last_spot": 61.2,
+      "exit_price": null,
+      "exit_date": null
+    }
+  ]
+}

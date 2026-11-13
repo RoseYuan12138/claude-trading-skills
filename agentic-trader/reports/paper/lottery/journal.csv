@@ -1,0 +1,4 @@
+date,event,ticket,contracts,price,spot,cash,equity,note
+2026-11-13,INIT,,0,0.00,0.00,500.00,500.00,cash $500
+2026-11-13,BUY,INTC 2027-01-15 92.5C,1,0.60,61.20,440.00,500.00,User-chosen lottery ticket. INTC realised vol 86-144% vs ~65% implied; needs +52% by 1/15; no earnings before expiry
+2026-11-13,MARK,,0,0.00,0.00,440.00,500.00,INTC 61.20
