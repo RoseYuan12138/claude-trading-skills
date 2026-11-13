@@ -1,13 +1,7 @@
 {
-  "cash": 687.8587737074686,
-  "last_mark": 90.9147436188386,
-  "position": {
-    "strike": 655.0,
-    "expiry": "2027-08-20",
-    "contracts": 1,
-    "entry_price": 93.12141226292532,
-    "entry_date": "2026-11-11"
-  },
+  "cash": 9205.615132751896,
+  "last_mark": 0.0,
+  "position": null,
   "history": [
     {
       "date": "2026-11-11",
@@ -32,6 +26,18 @@
       "fill": 0.0,
       "equity": 9779.333135591329,
       "note": "281 days left; roll at 60"
+    },
+    {
+      "date": "2026-11-13",
+      "action": "SELL",
+      "contracts": 0,
+      "strike": 0.0,
+      "expiry": null,
+      "model_price": 85.6055915481852,
+      "quote": null,
+      "fill": 85.17756359044428,
+      "equity": 9205.615132751896,
+      "note": "QQQ below its SMA"
     }
   ],
   "stop_reason": null
